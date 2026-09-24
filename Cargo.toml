@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+# 全家族的 Rust 依赖版本在此统一（矩阵规划 03 §4.2）：
+# reqwest 0.12×6 仓 vs 0.13×1 仓、tokio features 各写各的这类分裂不再重演
+[workspace.dependencies]
+image = "0.25"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+
+[profile.release]
+strip = true

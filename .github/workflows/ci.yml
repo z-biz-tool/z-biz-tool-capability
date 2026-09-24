@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+  pull_request:
+  workflow_dispatch:
+
+# 同一分支新 push 取消旧 run：并行会话连续提交时不排队烧 runner。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            label: macOS
+          - platform: ubuntu-22.04
+            label: Linux
+          - platform: windows-latest
+            label: Windows
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      # GitHub 新版 token 格式会写坏 cargo config，导致后续 cargo 报
+      # "Unexpected character at row 2, col 24"，删掉让它重新生成
+      - name: Reset broken cargo config
+        shell: bash
+        run: rm -f "$HOME/.cargo/config.toml" "$USERPROFILE/.cargo/config.toml"
+
+      - name: Cargo test
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings

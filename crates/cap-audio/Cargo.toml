@@ -1,0 +1,8 @@
+[package]
+name = "cap-audio"
+version = "0.1.0"
+edition = "2021"
+description = "音频处理原语（占位）：解码/重采样/混音/响度/编码。接口待 creator 侧音频能力集中后再定，先不实现。"
+license = "MIT"
+
+[dependencies]

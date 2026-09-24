@@ -1,0 +1,8 @@
+[package]
+name = "cap-video"
+version = "0.1.0"
+edition = "2021"
+description = "视频处理原语（占位）：抽帧/转码/拼接/字幕烧录。先不实现。"
+license = "MIT"
+
+[dependencies]
