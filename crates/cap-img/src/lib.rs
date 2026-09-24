@@ -22,22 +22,21 @@ pub struct ImageInfo {
 }
 
 /// 获取图片信息
-pub fn info(path: &str) -> Result<ImageInfo, String> {
-    let file_path = Path::new(path);
-
-    let metadata = fs::metadata(file_path).map_err(|e| format!("读取元数据失败: {}", e))?;
+pub fn info(path: impl AsRef<Path>) -> Result<ImageInfo, String> {
+    
+    let metadata = fs::metadata(path.as_ref()).map_err(|e| format!("读取元数据失败: {}", e))?;
     let size = metadata.len();
 
-    let img = image::open(file_path).map_err(|e| format!("打开图片失败: {}", e))?;
+    let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     let (width, height) = img.dimensions();
     let has_alpha = img.color().has_alpha();
 
-    let format = detect_format(path);
+    let format = detect_format(path.as_ref());
 
     // 尝试读取 EXIF（JPEG / TIFF）。注意 detect_format 返回的是小写扩展名，
     // 早先这里比的是 "JPEG"/"TIFF"，分支永远走不到 —— 属性面板因此从不显示 EXIF。
     let exif = if matches!(format.as_str(), "jpg" | "tiff") {
-        read_basic_exif(file_path)
+        read_basic_exif(path.as_ref())
     } else {
         None
     };
@@ -138,13 +137,13 @@ fn parse_exif_minimal(data: &[u8]) -> std::collections::HashMap<String, String> 
 ///
 /// `format` 与目标扩展名必须一致（jpeg 别名 .jpg/.jpeg 均可）：
 /// 前端按所选格式编码后再拼扩展名，两边不一致时写出来的文件是"名字说谎"。
-pub fn save_bytes(data: &str, dest_path: &str, format: &str) -> Result<u64, String> {
+pub fn save_bytes(data: &str, dest_path: impl AsRef<Path>, format: &str) -> Result<u64, String> {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     let bytes = STANDARD
         .decode(data.as_bytes())
         .map_err(|e| format!("Base64 解码失败: {}", e))?;
 
-    let dest = Path::new(dest_path);
+    let dest = dest_path.as_ref();
     let want = match format.to_ascii_lowercase().as_str() {
         "jpeg" => vec![".jpg".to_string(), ".jpeg".to_string()],
         other => vec![format!(".{}", other)],
@@ -156,7 +155,8 @@ pub fn save_bytes(data: &str, dest_path: &str, format: &str) -> Result<u64, Stri
     if !want.contains(&ext) {
         return Err(format!(
             "目标扩展名与所选格式不符: {} vs {}",
-            dest_path, format
+            dest_path.as_ref().display(),
+            format
         ));
     }
     if let Some(parent) = dest.parent() {
@@ -176,8 +176,8 @@ pub struct ImageThumbnail {
 }
 
 /// 生成图片缩略图，返回 base64 编码的 PNG
-pub fn thumbnail(path: &str, max_size: u32) -> Result<ImageThumbnail, String> {
-    let img = image::open(Path::new(path)).map_err(|e| format!("打开图片失败: {}", e))?;
+pub fn thumbnail(path: impl AsRef<Path>, max_size: u32) -> Result<ImageThumbnail, String> {
+    let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
 
     // 缩放图片以适应 max_size
     let size = if max_size == 0 { 200 } else { max_size };
@@ -199,10 +199,10 @@ pub fn thumbnail(path: &str, max_size: u32) -> Result<ImageThumbnail, String> {
 }
 
 /// 导出图片为指定格式
-pub fn export(path: &str, dest_path: &str, format: &str, quality: u8) -> Result<(), String> {
-    let img = image::open(Path::new(path)).map_err(|e| format!("打开图片失败: {}", e))?;
+pub fn export(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, format: &str, quality: u8) -> Result<(), String> {
+    let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
-    let dest = Path::new(dest_path);
+    let dest = dest_path.as_ref();
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -235,16 +235,16 @@ pub fn export(path: &str, dest_path: &str, format: &str, quality: u8) -> Result<
 }
 
 /// 缩放图片
-pub fn resize(path: &str, dest_path: &str, width: u32, height: u32) -> Result<(), String> {
-    let img = image::open(Path::new(path)).map_err(|e| format!("打开图片失败: {}", e))?;
+pub fn resize(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, width: u32, height: u32) -> Result<(), String> {
+    let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     let resized = img.resize(width, height, image::imageops::FilterType::Lanczos3);
 
     save_like_source(path, dest_path, &resized)
 }
 
 /// 旋转图片
-pub fn rotate(path: &str, dest_path: &str, degrees: u32) -> Result<(), String> {
-    let img = image::open(Path::new(path)).map_err(|e| format!("打开图片失败: {}", e))?;
+pub fn rotate(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, degrees: u32) -> Result<(), String> {
+    let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     let rotated = match degrees {
         90 => img.rotate90(),
         180 => img.rotate180(),
@@ -256,16 +256,16 @@ pub fn rotate(path: &str, dest_path: &str, degrees: u32) -> Result<(), String> {
 }
 
 /// 翻转图片
-pub fn flip(path: &str, dest_path: &str, horizontal: bool) -> Result<(), String> {
-    let img = image::open(Path::new(path)).map_err(|e| format!("打开图片失败: {}", e))?;
+pub fn flip(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, horizontal: bool) -> Result<(), String> {
+    let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     let flipped = if horizontal { img.fliph() } else { img.flipv() };
 
     save_like_source(path, dest_path, &flipped)
 }
 
 /// 裁剪图片
-pub fn crop(path: &str, dest_path: &str, x: u32, y: u32, w: u32, h: u32) -> Result<(), String> {
-    let img = image::open(Path::new(path)).map_err(|e| format!("打开图片失败: {}", e))?;
+pub fn crop(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, x: u32, y: u32, w: u32, h: u32) -> Result<(), String> {
+    let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
 
     // 验证裁剪区域
     if x + w > img.width() || y + h > img.height() {
@@ -285,16 +285,16 @@ pub fn crop(path: &str, dest_path: &str, x: u32, y: u32, w: u32, h: u32) -> Resu
 }
 
 /// 应用滤镜
-pub fn apply_filter(path: &str, dest_path: &str, filter_name: &str) -> Result<(), String> {
-    let img = image::open(Path::new(path)).map_err(|e| format!("打开图片失败: {}", e))?;
+pub fn apply_filter(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, filter_name: &str) -> Result<(), String> {
+    let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     let filtered = filter_impl(&img, filter_name)?;
     save_like_source(path, dest_path, &filtered)
 }
 
 /// 按"源图扩展名决定输出格式"保存——resize/rotate/flip/crop/filter 共用的收尾
-fn save_like_source(src: &str, dest_path: &str, img: &DynamicImage) -> Result<(), String> {
+fn save_like_source(src: impl AsRef<Path>, dest_path: impl AsRef<Path>, img: &DynamicImage) -> Result<(), String> {
     // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
-    let dest = Path::new(dest_path);
+    let dest = dest_path.as_ref();
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
@@ -387,8 +387,8 @@ fn filter_impl(img: &DynamicImage, filter_name: &str) -> Result<DynamicImage, St
 }
 
 /// 按扩展名检测图片格式（返回小写规范名，未知扩展名默认 png）
-pub fn detect_format(path: &str) -> String {
-    let ext = Path::new(path)
+pub fn detect_format(path: impl AsRef<Path>) -> String {
+    let ext = path.as_ref()
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
