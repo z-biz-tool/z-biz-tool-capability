@@ -3,7 +3,7 @@
 //! 那是调用方的安全策略，不在本 crate 职责内（lib.rs 顶部注释）。
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static SEQ: AtomicU32 = AtomicU32::new(0);
