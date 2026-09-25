@@ -133,12 +133,18 @@ cargo publish -p cap-img          # 真发布
 - [x] capability 仓 README 加安装说明（`cargo add cap-img`，并改掉还写着 git+tag 的消费方式）
 - [x] lead 侧回写：`03_能力层与项目容器.md` §4.2 用法行改成 crates.io 正式版，
       §11 表新增"分发方式已落地"一行（含 4 消费方 lock 来源、npm 子路径实测、18 处不迁盘点）
-- [ ] bootstrap `manifest.json` 登记 `z-biz-tool-capability`（00 §175 的 16 仓记 15 漂移）——
-      **本次故意不动**：登记错 `type` 会让 `should_sync` 把能力层当产品去发 DMG，
-      得先确认 manifest schema 的 `type: capability` 分支，留待单独一次改动
+- [x] bootstrap `manifest.json` 登记 `z-biz-tool-capability`（00 §175 的 16 仓记 15 漂移）——
+      2026-09-25 以 `type: capability` 登记，**登记前先核了 `should_sync` 分支**：
+      `sync.py:59` 与 `release_org.py:97` 都是严格 `type == "product"`，无 enum 校验、新取值不会被拒；
+      实测 sync 默认模式 / `release-org --plan` 均回「没匹配任何仓」，`status` clean、`audit` 零新增 issue、
+      `--license-only` 回「所有仓都已有 LICENSE」（该模式刻意绕过 `should_sync`，但文件存在即跳过）
 - [ ] 后续 `cap-audio` / `cap-video` 有实体代码时按本计划同流程发 0.1.0
+- [ ] **许可证待用户裁定**：本仓 `LICENSE` 是 Apache-2.0（全工作区唯一），三个 crate 与 crates.io
+      已发布元数据写 MIT。建议把 `LICENSE` 换成家族 MIT 文本（与线上已发布的不可覆盖元数据一致），
+      不建议反向改 crate（会要 0.2.1 且新旧声明打架）——**等用户拍板，本轮未改**
 
-**状态：** [x] 主体完成（2026-09-25）；仅剩 manifest 登记与占位 crate 的未来发布。
+**状态：** [x] 全部落地（2026-09-25），含 manifest 以 `type: capability` 登记并实测四条脚本；
+仅剩两件非本轮范围：许可证方向待用户拍板、占位 crate 有实现后再发 0.1.0。
 
 ---
 
