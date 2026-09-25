@@ -17,14 +17,21 @@ crates/
 
 ## 消费方式
 
+代码经 **crates.io** 分发，运行时静态链接进各 app，不发运行时包：
+
+```bash
+cargo add cap-img        # 现行 0.2.0（0.1.0 首发；crates.io 只增不改）
+```
+
 各 app 的 `src-tauri/Cargo.toml`：
 
 ```toml
 [dependencies]
-cap-img = { git = "https://github.com/z-biz-tool/z-biz-tool-capability", tag = "v0.1.0" }
+cap-img = "0.2.0"
 ```
 
-调用契约（命令名 / 参数 / 返回 / 错误码）落在 `z-biz-tool-shared/src/capability/`。
+调用契约（命令名 / 参数 / 返回 / 错误码）落在 `z-biz-tool-shared/src/capability/`，
+经 npm `z-biz-tool-shared` 的 `./capability` 子路径导出给 JS 侧。
 
 ## 红线（矩阵规划 03 §9）
 

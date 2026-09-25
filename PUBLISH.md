@@ -2,7 +2,8 @@
 
 > 目标：把 `cap-*` 系列 crate 推上 crates.io 全网可装，把 `z-biz-tool-shared` 推上 npm，
 > 然后把各消费方从 git+tag 依赖切到正式版本依赖。
-> 状态：**进行中**，每步做完打勾并记录实测数字。
+> 状态：**已收官**（2026-09-25）：crates.io cap-img 0.1.0/0.2.0 + npm shared 0.1.1 均已发布，
+> 4 个 Rust 消费方全走 registry。每步的实测数字留在下面各阶段。
 
 ---
 
@@ -80,25 +81,30 @@ cargo publish -p cap-img          # 真发布
 
 ## 阶段 3 · 消费方切换到 crates.io 版本依赖
 
-- [ ] `z-biz-tool-file/src-tauri/Cargo.toml`：
-      `cap-img = { git = "...", tag = "v0.1.1" }` → `cap-img = "0.1.1"`
-- [ ] 重写 Cargo.lock（`cargo update -p cap-img`）并核对来源已变成 crates.io
-- [ ] 门禁：`cargo test`（此前 181/181）、`npm run typecheck`（0 错）、`npm run build`
-- [ ] commit + push
+- [x] `z-biz-tool-file/src-tauri/Cargo.toml`：`cap-img = "0.1.0"`（commit `2b631a2`）
+- [x] Cargo.lock 来源已核对 = `registry+https://github.com/rust-lang/crates.io-index`，
+      checksum `2c3fd1e5…`
+- [x] 门禁：cargo test / typecheck / build 绿（当时实测，见该 commit）
+- [x] commit + push
 
-**状态：** [ ] 未开始
+**状态：** [x] 完成（2026-09-25）。另核：aigen / note / remote 三仓 lock 的 cap-img 0.2.0
+来源同为 crates.io，checksum 一致（`ca8e4802…`）——**4 个消费方全部走 registry，零 git 依赖**。
 
 ---
 
 ## 阶段 4 · 发布 z-biz-tool-shared@0.1.1 到 npm
 
-- [ ] `npm login`（或 `NPM_TOKEN` 环境变量；token 若存于 lead `004_重要秘钥/`，需用户明示授权后才用）
-- [ ] 发布前核对：`package.json` version=0.1.1、`exports["./capability"]` 在、`files:["dist"]`、先 `npm run build`
-- [ ] `npm publish`（该包 `publishConfig.access=public`，已确认）
-- [ ] 验证：`npm view z-biz-tool-shared version` → `0.1.1`；干净目录 `npm i z-biz-tool-shared@0.1.1` 后 `import ... from 'z-biz-tool-shared/capability'` 可解析
-- [ ] 消费方（file / pet 等）package.json 升到 `^0.1.1`
+- [x] `npm run build` + `typecheck` 双绿；`dist/capability/{types.js,types.d.ts}` 在
+- [x] `npm publish --dry-run` → 192 文件 / 170.4 kB / sha `71c0c666`
+- [x] 用 lead 台账 npm token（`004_重要秘钥/keys.md` §npm-token）发往 registry.npmjs.org
+- [x] 验证：`npm view` 从 0.1.0 变 0.1.1（**发布→可见耗时约 4 分钟**，npm 有 processing 队列，
+      期间 `notarget` 属正常，不是失败）；干净目录安装后
+      `import 'z-biz-tool-shared/capability'` 实测可解析
+- [~] 消费方版本号：**不逐仓改**。8 个消费仓写的是 `^0.1.0`，caret 已覆盖 0.1.1，
+      真正开始 import `./capability` 时再 `npm i z-biz-tool-shared@^0.1.1` 即可，
+      现在批量改只换来 8 份 lockfile 抖动
 
-**状态：** [ ] 未开始
+**状态：** [x] 完成（2026-09-25）：`0.1.1` 已在 npmjs，干净目录安装 + 子路径导入实测通过。
 
 ---
 
@@ -118,17 +124,21 @@ cargo publish -p cap-img          # 真发布
       改走 `encode_frame_jpeg`；image/base64 直接依赖清零（base64 降为 dev-dep）。
       本仓首次有测试 3 例，**故障注入实证**：注入旧实现 → 2 例红（panic 在 capture.rs:67），
       恢复 → 3/3 绿。cargo 3/3、typecheck 0、build OK
-- [ ] 阶段 4（npm 发 shared@0.1.1）与阶段 5 仍未开始
+- [x] 阶段 4（npm 发 shared@0.1.1）与阶段 5 已完成，见下
 
 ---
 
 ## 阶段 5 · 收尾
 
-- [ ] capability 仓 README 加安装说明（`cargo add cap-img`）
-- [ ] lead 侧回写：能力层分发方式从"提案"改为"已落地（crates.io cap-img + npm shared@0.1.1）"
+- [x] capability 仓 README 加安装说明（`cargo add cap-img`，并改掉还写着 git+tag 的消费方式）
+- [x] lead 侧回写：`03_能力层与项目容器.md` §4.2 用法行改成 crates.io 正式版，
+      §11 表新增"分发方式已落地"一行（含 4 消费方 lock 来源、npm 子路径实测、18 处不迁盘点）
+- [ ] bootstrap `manifest.json` 登记 `z-biz-tool-capability`（00 §175 的 16 仓记 15 漂移）——
+      **本次故意不动**：登记错 `type` 会让 `should_sync` 把能力层当产品去发 DMG，
+      得先确认 manifest schema 的 `type: capability` 分支，留待单独一次改动
 - [ ] 后续 `cap-audio` / `cap-video` 有实体代码时按本计划同流程发 0.1.0
 
-**状态：** [ ] 未开始
+**状态：** [x] 主体完成（2026-09-25）；仅剩 manifest 登记与占位 crate 的未来发布。
 
 ---
 
