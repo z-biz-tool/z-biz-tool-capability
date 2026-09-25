@@ -138,13 +138,23 @@ cargo publish -p cap-img          # 真发布
       `sync.py:59` 与 `release_org.py:97` 都是严格 `type == "product"`，无 enum 校验、新取值不会被拒；
       实测 sync 默认模式 / `release-org --plan` 均回「没匹配任何仓」，`status` clean、`audit` 零新增 issue、
       `--license-only` 回「所有仓都已有 LICENSE」（该模式刻意绕过 `should_sync`，但文件存在即跳过）
+- [x] **许可证全工作区统一为 MIT**（2026-09-25 用户拍板"所有统一一下"）：
+      本仓 `LICENSE` 原是 Apache-2.0（Initial commit `4284a57` 带入，全 16 仓唯一异类）→ 换成家族统一文本
+      （与其余 15 仓 md5 同 `5cfa635d…`，`Copyright (c) 2026 z-biz-tool`）；
+      顺带补齐元数据：**15 个 `package.json` 的 `license`**（14 个缺失字段 + `pet` 原为 `ISC`）、
+      **12 个 app 的 `src-tauri/Cargo.toml` `license = "MIT"`**（3 个 cap-* 本来就是 MIT；
+      `remote-server` 本就是 MIT 只补了末尾换行；`worker/agent-proxy/dist` 是构建产物不改）。
+      理由：crates.io 上 cap-img 0.1.0/0.2.0 已写死 MIT 且不可覆盖（反向改要 0.2.1 且新旧声明打架），
+      Apache 唯一实质优势的专利条款对内部库空转，且多 NOTICE/变更声明义务。
+      复盘点：LICENSE 文件 **16/16 MIT 且 md5 同为一族**（db/sys 原本只是末尾缺换行，已补）、
+      package.json **16/16 MIT**（16 个源文件，另有 1 个 `dist/package.json` 是构建产物不计）、
+      Cargo.toml **15/16 带 `license = "MIT"`**（差的 1 个是 capability
+      workspace 根、无 `[package]` 段故不适用；16 = 12 个 app + 3 个 cap-* + 1 个根）；
+      `cargo metadata --no-deps` 12/12 OK（改动只在 `[package]` 段加一行，无编译面影响）
 - [ ] 后续 `cap-audio` / `cap-video` 有实体代码时按本计划同流程发 0.1.0
-- [ ] **许可证待用户裁定**：本仓 `LICENSE` 是 Apache-2.0（全工作区唯一），三个 crate 与 crates.io
-      已发布元数据写 MIT。建议把 `LICENSE` 换成家族 MIT 文本（与线上已发布的不可覆盖元数据一致），
-      不建议反向改 crate（会要 0.2.1 且新旧声明打架）——**等用户拍板，本轮未改**
 
-**状态：** [x] 全部落地（2026-09-25），含 manifest 以 `type: capability` 登记并实测四条脚本；
-仅剩两件非本轮范围：许可证方向待用户拍板、占位 crate 有实现后再发 0.1.0。
+**状态：** [x] 全部落地（2026-09-25），含 manifest 以 `type: capability` 登记并实测四条脚本、
+许可证全工作区统一 MIT；仅剩占位 crate 有实现后再发 0.1.0。
 
 ---
 
