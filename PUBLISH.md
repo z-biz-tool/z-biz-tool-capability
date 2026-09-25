@@ -69,10 +69,12 @@ cargo publish -p cap-img          # 真发布
 
 ### 2.3 验证
 
-- [ ] `https://crates.io/crates/cap-img` 页面可见
-- [ ] 干净目录 `cargo new probe && cd probe` 里 `cargo add cap-img` 能拉下来
+- [x] `https://crates.io/crates/cap-img` 页面可见
+- [x] 干净目录 `cargo new probe` + `cargo add cap-img` → 拉取 + 编译通过（BUILD_OK，实测）
+- [x] **0.1.0 与 0.2.0 均已发布**（0.2.0 增补 data URL / 魔数嗅探 / RGBA 帧编码，测试 11→23，clippy 0）
 
-**状态：** [~] 检查单全绿 + dry-run 通过，**等用户放行真发布**（`cargo publish -p cap-img`，不可撤回）
+**状态：** [x] 完成（2026-09-25）：`cargo publish -p cap-img` 发布 **0.1.0** 与 **0.2.0**，
+干净项目 `cargo add cap-img` 实测可拉取并编译。
 
 ---
 
@@ -97,6 +99,26 @@ cargo publish -p cap-img          # 真发布
 - [ ] 消费方（file / pet 等）package.json 升到 `^0.1.1`
 
 **状态：** [ ] 未开始
+
+---
+
+## 阶段 3.5 · 消费方接入 cap-img 0.2.0（2026-09-25 追加）
+
+盘点结论：全工作区【可直接迁移】0 处、【需先扩 cap-img】6 处（aigen/note/remote 各 2），
+【不迁移】约 18 处（权限边界业务、只播放、外部二进制、纯前端 canvas）。cap-audio/cap-video
+本期零迁移对象，维持空壳。
+
+- [x] **aigen** `55f81e9`：sniff/mime/encode 下沉 cap-img；信任边界（symlink/8MB/白名单）原样保留；
+      decode_data_url 变薄委托，3 个调用方零改动。cargo 141/141、typecheck 0、build OK
+- [x] **note** `10bcaf2`：data URI 拆分 + base64 编解码换 cap-img，删 33 行手写 base64；
+      mime↔ext 映射留本仓（svg 单列是 cap-img 没有的）。行为差异：含非法字符的 payload
+      由「静默丢弃坏字符后落盘」改为直接报错。cargo 51/51、typecheck 0、build OK
+- [x] **remote** `7dff546`：**顺带修一个真 bug** —— `ecb895e`（2026-09-06）删掉降通道步骤后，
+      截屏把 4 通道数据声明成 Rgb8，image 0.25 每次 panic，至 2026-09-25 无修复，功能全程不可用。
+      改走 `encode_frame_jpeg`；image/base64 直接依赖清零（base64 降为 dev-dep）。
+      本仓首次有测试 3 例，**故障注入实证**：注入旧实现 → 2 例红（panic 在 capture.rs:67），
+      恢复 → 3/3 绿。cargo 3/3、typecheck 0、build OK
+- [ ] 阶段 4（npm 发 shared@0.1.1）与阶段 5 仍未开始
 
 ---
 
