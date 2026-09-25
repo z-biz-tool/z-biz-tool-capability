@@ -421,3 +421,161 @@ pub fn parse_format(format: &str) -> Result<ImageFormat, String> {
         )),
     }
 }
+
+// ---------------------------------------------------------------------------
+// 0.2.0：内存进内存出的字节级原语（data URL / 魔数嗅探 / 帧编码）
+// 这些场景没有落盘路径可传，因此不走上面的「路径进路径出」签名。
+// ---------------------------------------------------------------------------
+
+/// 按文件头魔数嗅探图片格式（**不看扩展名**，扩展名可伪造）。
+/// 识别 png/jpg/gif/webp，其余返回 None。
+pub fn sniff_format(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("jpg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("gif")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+/// 解析出的 data URL：MIME（小写、去掉参数段）+ 字节。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataUrl {
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
+/// 解析 `data:<mime>;base64,<payload>` → MIME + 字节。
+///
+/// - 非 `data:` 前缀、缺逗号、meta 里没有 base64 标记、或 payload 不是合法 base64 → None
+/// - payload 允许无 padding（`AA` 与 `AA==` 都收），与 note 侧历史行为一致
+pub fn decode_data_url(url: &str) -> Option<DataUrl> {
+    let rest = url.strip_prefix("data:")?;
+    let (meta, payload) = rest.split_once(',')?;
+    if !meta.to_ascii_lowercase().contains("base64") {
+        return None;
+    }
+    let mime = meta
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let bytes = base64_decode_padded(payload.trim()).ok()?;
+    Some(DataUrl { mime, bytes })
+}
+
+/// 字节 → `data:<mime>;base64,<payload>`
+pub fn encode_data_url(bytes: &[u8], mime: &str) -> String {
+    use base64::Engine;
+    format!(
+        "data:{};base64,{}",
+        mime,
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    )
+}
+
+/// MIME → 扩展名（`image/jpeg` → `jpg`，`image/svg+xml` → `svg`，认不出 → `png`）
+pub fn ext_for_mime(mime: &str) -> String {
+    let mime = mime.to_ascii_lowercase();
+    mime
+        .split_once('/')
+        .map(|(_, sub)| match sub {
+            "jpeg" | "jpg" => "jpg".to_string(),
+            other => other.split('+').next().unwrap_or("png").to_string(),
+        })
+        .unwrap_or_else(|| "png".to_string())
+}
+
+/// 扩展名 → MIME（认不出一律按 png 处理）
+pub fn mime_for_ext(ext: &str) -> &'static str {
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        _ => "application/octet-stream",
+    }
+}
+
+/// base64 解码，接受有/无 padding 两种写法（内部补齐到 4 的倍数）。
+fn base64_decode_padded(s: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    let mut s = s.trim().to_string();
+    while !s.len().is_multiple_of(4) {
+        s.push('=');
+    }
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map_err(|e| format!("Base64 解码失败: {}", e))
+}
+
+/// 内存进内存出的 JPEG 帧编码结果。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameJpeg {
+    pub base64: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// 把一帧 RGBA 原始像素编码成 JPEG/base64（截屏流这类**没有落盘路径**的场景）。
+///
+/// - `rgba_raw` 必须恰好 `width * height * 4` 字节；长度不符返回 Err —— **不 panic**。
+///   （历史 bug：把 4 通道数据声明成 `Rgb8` 交给 JPEG 编码器会直接 abort 整个进程）
+/// - `max_width == 0` 或原图已更窄时不缩放；缩放用三角滤波、新高度向上取整
+/// - `quality` 夹到 10..=100
+pub fn encode_frame_jpeg(
+    rgba_raw: &[u8],
+    width: u32,
+    height: u32,
+    quality: u8,
+    max_width: u32,
+) -> Result<FrameJpeg, String> {
+    use base64::Engine;
+    let expected = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|px| px.checked_mul(4))
+        .ok_or_else(|| format!("尺寸溢出: {}x{}", width, height))?;
+    if rgba_raw.len() != expected {
+        return Err(format!(
+            "RGBA 数据长度不符: 期望 {} 字节, 实得 {} 字节 ({}x{})",
+            expected,
+            rgba_raw.len(),
+            width,
+            height
+        ));
+    }
+    let mut img = image::RgbaImage::from_raw(width, height, rgba_raw.to_vec())
+        .ok_or_else(|| format!("无法构造 RGBA 图像: {}x{}", width, height))?;
+
+    if max_width != 0 && width > max_width {
+        let new_h = ((height as f64) * (max_width as f64 / width as f64)).ceil() as u32;
+        img = image::imageops::resize(
+            &img,
+            max_width,
+            new_h.max(1),
+            image::imageops::FilterType::Triangle,
+        );
+    }
+
+    let (w, h) = img.dimensions();
+    // RgbaImage 自身没有 to_rgb8，要先包成 DynamicImage；这一步把 4 通道降成 3 通道，
+    // 下面声明 Rgb8 才和真实缓冲长度对得上（历史 bug 正是这里没做转换）
+    let rgb = DynamicImage::ImageRgba8(img).to_rgb8();
+    let mut buf: Vec<u8> = Vec::new();
+    let q = quality.clamp(10, 100);
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, q)
+        .encode(rgb.as_raw(), w, h, image::ExtendedColorType::Rgb8)
+        .map_err(|e| format!("编码 JPEG 失败: {}", e))?;
+
+    Ok(FrameJpeg {
+        base64: base64::engine::general_purpose::STANDARD.encode(&buf),
+        width: w,
+        height: h,
+    })
+}

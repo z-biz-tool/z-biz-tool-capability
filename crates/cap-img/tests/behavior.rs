@@ -259,3 +259,166 @@ fn detect_format_normalizes_known_extensions() {
     assert_eq!(cap_img::detect_format("a.tif"), "tiff");
     assert_eq!(cap_img::detect_format("a.heic"), "png"); // 未知扩展名默认 png
 }
+
+// ---------------------------------------------------------------------------
+// 0.2.0 字节级原语：魔数嗅探 / data URL / 帧编码
+// 每个用例都对着「消费方的原始形状」断言，确保搬过来语义没漂。
+// ---------------------------------------------------------------------------
+
+#[test]
+fn sniff_by_magic_not_extension() {
+    // aigen reference.rs 的原始断言形状
+    let png: &[u8] = b"\x89PNG\r\n\x1a\n..";
+    let jpeg: &[u8] = b"\xff\xd8\xff\xe0..";
+    assert_eq!(cap_img::sniff_format(png), Some("png"));
+    assert_eq!(cap_img::sniff_format(jpeg), Some("jpg"));
+    assert_eq!(cap_img::sniff_format(b"GIF89a.."), Some("gif"));
+    let webp: &[u8] = b"RIFF\x00\x00\x00\x00WEBP\x00\x00\x00";
+    assert_eq!(cap_img::sniff_format(webp), Some("webp"));
+    assert_eq!(cap_img::sniff_format(b"\x00\x01binary"), None);
+    // 扩展名说谎也不认：只有 .png 后缀但内容是垃圾 → None
+    assert_eq!(cap_img::sniff_format(b"not an image at all"), None);
+}
+
+#[test]
+fn sniff_rejects_short_webp_prefix() {
+    // RIFF 开头但不足 12 字节：不能越界切片，也不能误判
+    assert_eq!(cap_img::sniff_format(b"RIFF"), None);
+    assert_eq!(cap_img::sniff_format(b"RIFFxxxxWEB"), None);
+}
+
+#[test]
+fn data_url_roundtrip() {
+    let bytes = b"hello image bytes";
+    let url = cap_img::encode_data_url(bytes, "image/png");
+    assert!(url.starts_with("data:image/png;base64,"));
+    let parsed = cap_img::decode_data_url(&url).expect("刚编的必须能解回来");
+    assert_eq!(parsed.mime, "image/png");
+    assert_eq!(parsed.bytes, bytes);
+}
+
+#[test]
+fn decode_data_url_matches_aigen_semantics() {
+    // aigen history.rs 的原始用例（解不出 → None）
+    let png = cap_img::encode_data_url(b"\x89PNG\r\n\x1a\n", "image/png");
+    let (b, ext) = {
+        let d = cap_img::decode_data_url(&png).unwrap();
+        (d.bytes, cap_img::ext_for_mime(&d.mime))
+    };
+    assert_eq!(b, b"\x89PNG\r\n\x1a\n");
+    assert_eq!(ext, "png");
+    assert_eq!(
+        cap_img::decode_data_url("data:image/jpeg;base64,AA==")
+            .map(|d| cap_img::ext_for_mime(&d.mime)),
+        Some("jpg".to_string())
+    );
+    assert_eq!(
+        cap_img::decode_data_url("data:image/svg+xml;base64,AA==")
+            .map(|d| cap_img::ext_for_mime(&d.mime)),
+        Some("svg".to_string())
+    );
+    // meta 没有 base64 标记 / payload 不是合法 base64 → None
+    assert!(cap_img::decode_data_url("data:image/png,notbase64").is_none());
+    assert!(cap_img::decode_data_url("data:image/png;base64,!!!not-b64!!!").is_none());
+    // 不是 data URL / 缺逗号 → None
+    assert!(cap_img::decode_data_url("https://x/y.png").is_none());
+    assert!(cap_img::decode_data_url("data:image/png;base64").is_none());
+    assert!(cap_img::decode_data_url("").is_none());
+}
+
+#[test]
+fn decode_data_url_accepts_unpadded_payload() {
+    // note 侧历史行为：payload 无 padding 也能解
+    let d = cap_img::decode_data_url("data:image/png;base64,AA").expect("无 padding 应可解");
+    assert_eq!(d.bytes, vec![0u8]);
+    let d2 = cap_img::decode_data_url("data:image/png;base64,AA==").expect("有 padding 应可解");
+    assert_eq!(d.bytes, d2.bytes);
+}
+
+#[test]
+fn decode_data_url_mime_is_normalized() {
+    // 带参数段 + 大写：取到的 mime 应是干净小写的主类型
+    let d = cap_img::decode_data_url("data:image/PNG; charset=utf-8;BASE64,AA==")
+        .expect("带参数也应可解");
+    assert_eq!(d.mime, "image/png");
+}
+
+#[test]
+fn mime_ext_mapping_bidirectional() {
+    // note read_image 的 mime 选择形状
+    assert_eq!(cap_img::mime_for_ext("jpg"), "image/jpeg");
+    assert_eq!(cap_img::mime_for_ext("jpeg"), "image/jpeg");
+    assert_eq!(cap_img::mime_for_ext("png"), "image/png");
+    assert_eq!(cap_img::mime_for_ext("gif"), "image/gif");
+    assert_eq!(cap_img::mime_for_ext("webp"), "image/webp");
+    assert_eq!(cap_img::mime_for_ext("svg"), "application/octet-stream");
+    // note save_image 的 ext 选择形状（按 mime 判）
+    assert_eq!(cap_img::ext_for_mime("image/png"), "png");
+    assert_eq!(cap_img::ext_for_mime("image/jpeg"), "jpg");
+    assert_eq!(cap_img::ext_for_mime("image/svg+xml"), "svg");
+    assert_eq!(cap_img::ext_for_mime("video/mp4"), "mp4");
+    assert_eq!(cap_img::ext_for_mime("garbage"), "png");
+}
+
+#[test]
+fn frame_jpeg_encodes_rgba_without_panic() {
+    // remote capture.rs 的真实形状：4x4 全 128 的 RGBA 帧
+    let (w, h) = (4u32, 4u32);
+    let rgba = vec![128u8; (w * h * 4) as usize];
+    let frame = cap_img::encode_frame_jpeg(&rgba, w, h, 80, 0).expect("合法帧必须编码成功");
+    use base64::Engine;
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(&frame.base64)
+        .expect("base64 必须合法");
+    // JPEG 魔数 + 确实是解得开的图
+    assert_eq!(&raw[..2], &[0xFF, 0xD8]);
+    let img = image::load_from_memory(&raw).expect("编码产物必须能被 image 解回来");
+    assert_eq!((img.width(), img.height()), (w, h));
+    assert_eq!((frame.width, frame.height), (w, h));
+}
+
+#[test]
+fn frame_jpeg_wrong_channel_length_is_error_not_panic() {
+    // 历史 bug 的回归锚点：4 通道数据 + 声明 3 通道 = image crate 直接 abort。
+    // 现在必须在长度校验处返回 Err，进程活着拿到可读信息。
+    let (w, h) = (4u32, 4u32);
+    let wrong = vec![128u8; (w * h * 3) as usize]; // 3 通道冒充 4 通道
+    let err = cap_img::encode_frame_jpeg(&wrong, w, h, 80, 0)
+        .expect_err("长度不符必须报错而不是 panic");
+    assert!(err.contains("长度不符"), "实得 {}", err);
+    assert!(err.contains("48"), "错误信息应带期望长度，实得 {}", err);
+}
+
+#[test]
+fn frame_jpeg_downscales_to_max_width() {
+    // remote 的 downscale 语义：等比缩小、高度向上取整、已窄不放大
+    let (w, h) = (100u32, 33u32);
+    let rgba = vec![200u8; (w * h * 4) as usize];
+    let f = cap_img::encode_frame_jpeg(&rgba, w, h, 70, 50).unwrap();
+    assert_eq!(f.width, 50);
+    assert_eq!(f.height, 17); // 33 * 0.5 = 16.5 → ceil 17
+
+    // max_width == 0 → 原样
+    let f0 = cap_img::encode_frame_jpeg(&rgba, w, h, 70, 0).unwrap();
+    assert_eq!((f0.width, f0.height), (100, 33));
+
+    // 原图已比 max_width 窄 → 不放大
+    let f1 = cap_img::encode_frame_jpeg(&rgba, w, h, 70, 500).unwrap();
+    assert_eq!((f1.width, f1.height), (100, 33));
+}
+
+#[test]
+fn frame_jpeg_quality_is_clamped() {
+    let rgba = vec![10u8; (8 * 8 * 4) as usize];
+    // 0 与 255 都不该 panic/报错，夹到 10..=100
+    assert!(cap_img::encode_frame_jpeg(&rgba, 8, 8, 0, 0).is_ok());
+    assert!(cap_img::encode_frame_jpeg(&rgba, 8, 8, 255, 0).is_ok());
+}
+
+#[test]
+fn frame_jpeg_rejects_overflow_dimensions() {
+    let rgba = vec![0u8; 16];
+    let err = cap_img::encode_frame_jpeg(&rgba, u32::MAX, u32::MAX, 80, 0)
+        .expect_err("尺寸溢出应报错");
+    assert!(err.contains("溢出") || err.contains("长度不符"), "实得 {}", err);
+}

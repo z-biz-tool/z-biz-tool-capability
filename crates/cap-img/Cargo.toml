@@ -1,6 +1,6 @@
 [package]
 name = "cap-img"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "图片处理原语：信息/缩略图/缩放/旋转/翻转/裁剪/滤镜/编码/EXIF（路径进→路径出，无状态）"
 license = "MIT"
