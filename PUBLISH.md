@@ -41,7 +41,10 @@ cargo login <token>
 - 注意：本机 rsproxy 镜像**只影响下载**，`cargo publish` 永远发往官方 crates.io，不受镜像影响。
 - 验证：`cargo login --list` 能看到已存的 token 条目。
 
-**状态：** [ ] 未开始
+**状态：** [x] 完成（2026-09-25）：token 已存入 `~/.cargo/credentials.toml`；并按组织规矩登记源台账
+`ceo/003_组织管理/keys/KEYS.md` §crates-io（指纹 `b5b10acb7958`），经 `distribute_keys.py --apply`
+分发到 `z-biz-tool-lead/004_重要秘钥/keys.md`，`--check` 漂移 0。
+注：crates.io `/api/v1/me` 被站点保护挡 curl（403 与 token 无关），存活以真发布为准。
 
 ---
 
@@ -49,10 +52,12 @@ cargo login <token>
 
 ### 2.1 发布前检查单
 
-- [ ] `Cargo.toml` 版本号 = 想发的版本（当前 `0.1.0`，如已用过 0.1.0 则 bump 到 `0.1.1` 与 tag 对齐）
-- [ ] `license` / `repository` / `description` / `keywords` / `categories` 字段齐全（crates.io 强制要求 description + license 或 license-file）
-- [ ] 本仓 CI 三平台绿（tag 对应 commit）
-- [ ] `cargo package -p cap-img --list` 只包含 src/tests/Cargo.toml/README，无秘钥无 target
+- [x] `Cargo.toml` 版本号 = `0.1.0`（首次发布，与 tag v0.1.0 对齐；元数据已补 repository/keywords/categories，commit `88c43c5`）
+- [x] `license` / `repository` / `description` / `keywords` / `categories` 字段齐全
+- [x] 本仓 CI 三平台绿（tag 对应 commit）
+- [x] `cargo package -p cap-img --list` 只包含 6 个文件（Cargo.toml/lock/vcs_info + src/tests），无秘钥无 target
+- [x] `cargo package -p cap-img` 打包后编译通过（17.77s）
+- [x] `cargo publish -p cap-img --dry-run` 通过：Packaged 54.3KiB（16.2KiB 压缩）+ 校验编译 2.87s
 
 ### 2.2 发布命令
 
@@ -67,7 +72,7 @@ cargo publish -p cap-img          # 真发布
 - [ ] `https://crates.io/crates/cap-img` 页面可见
 - [ ] 干净目录 `cargo new probe && cd probe` 里 `cargo add cap-img` 能拉下来
 
-**状态：** [ ] 未开始
+**状态：** [~] 检查单全绿 + dry-run 通过，**等用户放行真发布**（`cargo publish -p cap-img`，不可撤回）
 
 ---
 
