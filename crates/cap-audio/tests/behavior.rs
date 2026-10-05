@@ -5,6 +5,11 @@
 //! 「编码→解码→比对」会自己跟自己对上，测试全绿而文件是坏的。
 //! 所以下面所有 WAV 都是按 RIFF 规范手工拼出来的字节。
 
+// 测试名是中文描述式的，术语里的 ASCII 部分（WAV / EXTENSIBLE / RIFF / DSP）天然
+// 含大写，clippy 的 non_snake_case 会逐个报错。与其把术语降写换取"看起来合规"，
+// 不如显式豁免并在此说明——测试名的可读性优先。
+#![allow(non_snake_case)]
+
 use cap_audio::dsp;
 use cap_audio::pcm::{decode_wav, encode_wav, probe_wav, SampleFormat};
 use cap_audio::{self as audio, Pcm};

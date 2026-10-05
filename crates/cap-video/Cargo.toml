@@ -2,7 +2,12 @@
 name = "cap-video"
 version = "0.1.0"
 edition = "2021"
-description = "视频处理原语（占位）：抽帧/转码/拼接/字幕烧录。先不实现。"
+description = "视频处理原语：MP4/MOV/WebM/MKV 容器元数据探测（时长/宽高/编码/帧数）+ ffmpeg 可用性检测与抽帧（路径进→路径出，无状态）"
 license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["video", "mp4", "webm", "metadata", "thumbnail", "ffmpeg"]
+categories = ["multimedia::video", "api-bindings"]
 
+# 刻意零依赖：容器元数据解析是纯字节计算；解码交给外部 ffmpeg 并做可用性检测
 [dependencies]
