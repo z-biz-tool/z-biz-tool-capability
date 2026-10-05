@@ -2,7 +2,12 @@
 name = "cap-audio"
 version = "0.1.0"
 edition = "2021"
-description = "音频处理原语（占位）：解码/重采样/混音/响度/编码。接口待 creator 侧音频能力集中后再定，先不实现。"
+description = "音频处理原语：WAV 编解码/重采样/增益/淡入淡出/裁剪/拼接/混音/倒放/声道拆分/响度（路径进→路径出，无状态）"
 license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["audio", "wav", "pcm", "resample", "dsp"]
+categories = ["multimedia::audio", "api-bindings"]
 
+# 刻意零依赖：WAV 容器解析与 PCM 换算是纯计算，零依赖换来「每条能力都能单测」
 [dependencies]
