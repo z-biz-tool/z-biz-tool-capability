@@ -6,7 +6,10 @@ description = "视频处理原语：MP4/MOV/WebM/MKV 容器元数据探测（时
 license = "MIT"
 repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
 homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
-keywords = ["video", "mp4", "webm", "metadata", "thumbnail", "ffmpeg"]
+# crates.io 硬限制：keywords 最多 5 个（2026-10-20 首次发布被 400 拒：
+# "expected at most 5 keywords per crate"，上传前校验 ⇒ crate 未建成、名字未被占）。
+# 去掉最偏实现细节的 ffmpeg，保留 5 个能力词。
+keywords = ["video", "mp4", "webm", "metadata", "thumbnail"]
 categories = ["multimedia::video", "api-bindings"]
 
 # 刻意零依赖：容器元数据解析是纯字节计算；解码交给外部 ffmpeg 并做可用性检测
