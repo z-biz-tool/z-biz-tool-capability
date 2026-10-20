@@ -4,6 +4,9 @@
 > 然后把各消费方从 git+tag 依赖切到正式版本依赖。
 > 状态：**已收官**（2026-09-25）：crates.io cap-img 0.1.0/0.2.0 + npm shared 0.1.1 均已发布，
 > 4 个 Rust 消费方全走 registry。每步的实测数字留在下面各阶段。
+> **2026-10-20 追加发布**（用户授权「可以，发布」）：crates.io 现有 **cap-img 0.1.0/0.2.0/0.3.0
+> + cap-audio 0.1.0 + cap-video 0.1.0** —— 三个 crate 的名字**全部认领到手**，
+> 窗口期问题消解。实录见阶段 2.5 与 `doc/优化方案/08_本轮深度优化实施记录.md` §8.10。
 
 ---
 
@@ -17,6 +20,11 @@
   > **2026-10-20 订正**：这句话**现在只对了一半** —— `cap-img` 已发布 0.2.0（HTTP 200），
   > `cap-audio` / `cap-video` 仍 404（**仍可注册，名字仍敞着**）。
   > 2026-10-20 复测，与 2026-10-04 初测一致。
+  >
+  > **2026-10-20 18:59 终态**：三个名字**全部认领到手**，HTTP 全 200 ——
+  > `cap-img` 0.3.0（新增）/`cap-audio` 0.1.0（新增）/`cap-video` 0.1.0（新增）。
+  > 「名字仍敞着」这个窗口期问题**到此消解**：crate 名是先到先得且永久占用，
+  > 现在这三个名字谁都抢不走了。
 
 ---
 
@@ -91,6 +99,88 @@ cargo publish -p cap-img          # 真发布
 > encode_frame_jpeg / sniff_format / mime 映射），**未受影响**；
 > 只有 file 仓用到变换族，且它 lock 的是 0.1.0，升级需显式改依赖号。
 > 详见 `doc/优化方案/08_本轮深度优化实施记录.md` §8.5。
+>
+> **↑ 以上已被 2026-10-20 18:59 的实际发布取代，见下面「阶段 2.5」。**
+
+---
+
+## 阶段 2.5 · 2026-10-20 追加发布：cap-img 0.3.0 + cap-audio 0.1.0 + cap-video 0.1.0
+
+> 触发：用户授权「可以，发布」。三个 crate 一次发布，**crate 名全部认领到手**。
+> 本节的每个数字都来自**当次实跑**，命令见 `doc/优化方案/08` §8.10。
+
+### 2.5.1 发布前检查单（逐项实测，全部过）
+
+| 检查项 | 实测结果 |
+| --- | --- |
+| 版本号不与 crates.io 既有版本冲突 | cap-img 0.3.0（既有 0.1.0/0.2.0）、cap-audio 0.1.0、cap-video 0.1.0 |
+| 元数据齐全 | `license` / `repository` / `homepage` / `description` / `keywords` / `categories` 三者皆齐 |
+| 本地 fmt | `cargo fmt --all --check` **rc=0** |
+| 本地 clippy | `cargo clippy --all-targets --all-features -- -D warnings` **rc=0** |
+| 本地测试 | `cargo test --workspace` **94 passed / 0 failed**（cap-audio 29 / cap-img 40 / cap-video 3+22） |
+| **三平台 CI** | GitHub Actions run `39402819882`（commit `e69081d`）**三个 job 全 success**（macOS / Ubuntu / Windows 逐 job 核过） |
+| 打包文件清单 | `cargo package --list`：cap-img 6 / cap-audio 8 / cap-video 9 个文件，**无秘钥无 target** |
+| 干跑 | `cargo publish --dry-run` 三个 crate **全 rc=0**（含从 tarball 的校验编译） |
+| 工作区状态 | `HEAD == origin/main == e69081d`，`git status --porcelain -uall` 为空 |
+
+### 2.5.2 第一次发布被 400 拒（cap-video）
+
+```
+error: failed to publish cap-video v0.1.0 to registry at https://crates.io
+Caused by:
+  the remote server responded with an error (status 400 Bad Request):
+  expected at most 5 keywords per crate
+```
+
+crates.io 硬限制 **keywords 最多 5 个**，cap-video 原写了 6 个
+（`video` / `mp4` / `webm` / `metadata` / `thumbnail` / `ffmpeg`）。
+
+关键性质：该校验发生在**上传前** ⇒ **crate 未建成、名字未被占**
+（复测 `GET /api/v1/crates/cap-video` 仍 HTTP 404）。
+⇒ 失败**不消耗名字**，修掉即可重发。
+
+修法：去掉最偏实现细节的 `ffmpeg`，保留 5 个能力词
+（commit `1d3109a`）。改完**重跑三平台 CI 并全绿**（run `39413304769`）才重发。
+
+### 2.5.3 发布结果（crates.io API 实测）
+
+| crate | 版本 | created_at | yanked | 当前状态 |
+| --- | --- | --- | --- | --- |
+| `cap-img` | **0.3.0** | 2026-10-20T10:59:45Z | false | 新增，nowest |
+| `cap-audio` | **0.1.0** | 2026-10-20T10:59:50Z | false | 新增，**名字已认领**（原 404） |
+| `cap-video` | **0.1.0** | 2026-10-20T11:15:35Z | false | 新增，**名字已认领**（原 404） |
+
+`cap-img` 0.1.0 / 0.2.0 仍在线、未 yank（不可删除、不可覆盖，只能 yank 撤下）。
+
+### 2.5.4 干净目录安装验证（阶段 2.3 口径）
+
+`/tmp/probe_pub` 全新 `cargo init` → `cargo add cap-img cap-audio cap-video` →
+拉到 **0.3.0 / 0.1.0 / 0.1.0**，lock 三个条目 source 均为
+`registry+https://github.com/rust-lang/crates.io-index`（非 git 依赖），
+编译通过并**实跑**：
+
+```
+[cap-img]   sniff_format(png) = Some("png")
+[cap-img]   mime_for_ext(jpg) = image/jpeg
+[cap-img]   encode_data_url -> data:image/png;base64,iVBORw0K...  decode 回环 = true
+[cap-audio] encode_wav(I16) -> 52 bytes, RIFF魔数 = [82, 73, 70, 70]
+[cap-audio] probe_wav 解析 = true      rms_dbfs = -8.5194
+[cap-video] sniff_container(mp4) = Some("mp4")
+[cap-video] ffmpeg_available() = false   （本机 ffmpeg 缺 dylib ⇒ 如 README 所述会报错而非撒谎）
+```
+
+### 2.5.5 本阶段**未做**的
+
+- **未推 git tag** —— crates.io 发布不依赖 tag；且 cap-audio / cap-video 的 0.1.0
+  与仓内既有 tag `v0.1.0`（cap-img 时代）**撞名**，需要先定 tag 命名约定
+  （例如 `cap-audio-v0.1.0` / `cap-video-v0.1.0` / `cap-img-v0.3.0`），
+  属拍板事项，未擅自定。
+- **未升级消费方依赖号** —— aigen / note / remote 写的是 `cap-img = "0.2.0"`，
+  file 写的是 `"0.1.0"`。实测调用面：前三个只用字节级原语（0.3.0 未动这些）
+  ⇒ 升级是零行为变化；**file 是唯一用到变换族的仓**，升级会改变产出格式，
+  需单独一轮。0.1.0 仍在 crates.io 上，file 继续用 0.1.0 **完全可用**。
+- **未在发布物里带 LICENSE 文件** —— 与已发布的 0.2.0 保持一致（同样是 6 个文件、
+  无 LICENSE）；SPDX `license = "MIT"` 已在元数据里。要补的话三个 crate 目录各放一份 LICENSE。
 
 ---
 
@@ -166,10 +256,15 @@ cargo publish -p cap-img          # 真发布
       Cargo.toml **15/16 带 `license = "MIT"`**（差的 1 个是 capability
       workspace 根、无 `[package]` 段故不适用；16 = 12 个 app + 3 个 cap-* + 1 个根）；
       `cargo metadata --no-deps` 12/12 OK（改动只在 `[package]` 段加一行，无编译面影响）
-- [ ] 后续 `cap-audio` / `cap-video` 有实体代码时按本计划同流程发 0.1.0
+- [x] 后续 `cap-audio` / `cap-video` 有实体代码时按本计划同流程发 0.1.0
+      —— **条件已满足并执行（2026-10-20）**：两个 crate 已于 2026-10-05 从 4 行空壳
+      写成真能力（cap-audio 1160 行 src / 29 条测试，cap-video 1202 行 src / 25 条测试），
+      当日按本计划同流程发布 **0.1.0**（见阶段 2.5）。
 
 **状态：** [x] 全部落地（2026-09-25），含 manifest 以 `type: capability` 登记并实测四条脚本、
-许可证全工作区统一 MIT；仅剩占位 crate 有实现后再发 0.1.0。
+许可证全工作区统一 MIT。
+**2026-10-20 追加**：`cap-img` 0.3.0 + `cap-audio` 0.1.0 + `cap-video` 0.1.0 已发布，
+三个 crate 名全部认领（见阶段 2.5）。
 
 ---
 
@@ -178,4 +273,10 @@ cargo publish -p cap-img          # 真发布
 1. 不 `cargo publish` 未打过 CI 绿灯的版本。
 2. 不在没有用户授权的情况下使用任何 token（crates.io / npm 皆然）。
 3. 不删除/覆盖已发布版本；发错只能 bump 新版本 + yank 旧版本。
-4. 占位 crate（cap-audio/cap-video 空壳）**不发布**——crates.io 不允许纯占位包浪费名字，等有实现再说。
+4. **空壳 crate 不发布**——crates.io 不允许纯占位包浪费名字，等有实现再说。
+   > 这条**原则不变**，但触发条件已变：cap-audio / cap-video 已于 2026-10-05 从 4 行空壳
+   > 写成真能力（1160 / 1202 行 src + 各自测试网），**不再是空壳** ⇒
+   > 2026-10-20 按阶段 2.5 正常发布 0.1.0。
+   > 「名字先到先得、永久占用」正是当初不能急着发空壳的原因：
+   > 先把能力做完再占名，名占下来才不亏。
+

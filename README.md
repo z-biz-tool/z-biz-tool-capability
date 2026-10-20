@@ -47,18 +47,34 @@ crates/
 代码经 **crates.io** 分发，运行时静态链接进各 app，不发运行时包：
 
 ```bash
-cargo add cap-img        # 现行 0.2.0（0.1.0 首发；crates.io 只增不改）
+cargo add cap-img      # 0.3.0（0.1.0/0.2.0 为旧版；crates.io 只增不改）
+cargo add cap-audio    # 0.1.0（2026-10-20 首发）
+cargo add cap-video    # 0.1.0（2026-10-20 首发）
 ```
 
-> ⚠️ 仓内 `cap-img` 已是 **0.3.0**（行为收紧，**尚未发布**）——
-> crates.io 上的现行版本仍是 0.2.0。两者别混。
+> 三个 crate 均已上架 crates.io。版本号**不可覆盖、不可删除**（只能 yank 撤下，
+> 但版本号永久占用）⇒ 发错了只能 bump 新版本。
 
 各 app 的 `src-tauri/Cargo.toml`：
 
 ```toml
 [dependencies]
-cap-img = "0.2.0"
+cap-img = "0.3.0"
 ```
+
+> ⚠️ **消费方的依赖号还没全部跟上**（实测调用面，2026-10-20）：
+>
+> | 消费方 | 现在写的 | 0.3.0 的行为收紧对它的影响 |
+> | --- | --- | --- |
+> | aigen | `"0.2.0"` | **无** —— 只用 `decode_data_url` / `encode_data_url` / `ext_for_mime` / `mime_for_ext` / `sniff_format`（字节级原语，0.3.0 未动） |
+> | note | `"0.2.0"` | **无** —— 只用 `decode_data_url` / `encode_data_url` |
+> | remote | `"0.2.0"` | **无** —— 只用 `encode_frame_jpeg` |
+> | file | `"0.1.0"` | **有** —— 唯一用到变换族的仓：`save_bytes` / `export` / `resize` / `rotate` / `flip` / `crop` / `apply_filter` 全在 0.3.0 的改动面上 |
+>
+> 也就是说：前三个升到 0.3.0 是**零行为变化**（纯版本号跟进），
+> file 升 0.3.0 会**改变产出格式**（目标扩展名决定格式），需显式改依赖号 + 同步 lock
+> + 复跑 file 的测试。**本轮未做**（跨仓行为变更，需单独一轮）。
+> file 继续用 0.1.0 也完全可用 —— 0.1.0 仍在 crates.io 上。
 
 调用契约（命令名 / 参数 / 返回 / 错误码）落在 `z-biz-tool-shared/src/capability/`，
 经 npm `z-biz-tool-shared` 的 `./capability` 子路径导出给 JS 侧。
