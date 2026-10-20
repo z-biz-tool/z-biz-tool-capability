@@ -1,6 +1,12 @@
 [package]
 name = "cap-img"
-version = "0.2.0"
+# 0.3.0（本轮行为收紧，**尚未发布**，crates.io 上现行仍是 0.2.0）：
+#   - 输出格式改由**目标扩展名**决定（此前按源图扩展名 ⇒ 产出「名字说谎」的文件）
+#   - export 新增「format 与目标扩展名必须一致」校验（与 save_bytes 同一规则）
+#   - 目标扩展名认不出来时报错，不再悄悄写成 PNG
+#   - 修 crop 坐标溢出（debug panic / release 回绕）与 EXIF IFD0 越界 panic
+# 破坏性变更（0.x 语义下 minor 即 breaking）⇒ 必须 bump，不能复用 0.2.0。
+version = "0.3.0"
 edition = "2021"
 description = "图片处理原语：信息/缩略图/缩放/旋转/翻转/裁剪/滤镜/编码/EXIF（路径进→路径出，无状态）"
 license = "MIT"

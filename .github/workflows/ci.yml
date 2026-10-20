@@ -46,3 +46,10 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+
+      # fmt 门此前**根本不存在**（仓库里有 rustfmt，但三条流水线都没检查过它）。
+      # 后果是 cap-img 的 src/lib.rs 与 tests/behavior.rs 一直没格式化 —— 本地
+      # `cargo fmt --all --check` rc=1，而 CI 全绿：**门禁守了个自己看不见的改动面**。
+      # 格式差异与平台无关，本地就能量 ⇒ 可以安全地加成硬门禁。
+      - name: Format check
+        run: cargo fmt --all --check

@@ -50,6 +50,9 @@ crates/
 cargo add cap-img        # 现行 0.2.0（0.1.0 首发；crates.io 只增不改）
 ```
 
+> ⚠️ 仓内 `cap-img` 已是 **0.3.0**（行为收紧，**尚未发布**）——
+> crates.io 上的现行版本仍是 0.2.0。两者别混。
+
 各 app 的 `src-tauri/Cargo.toml`：
 
 ```toml
@@ -59,6 +62,18 @@ cap-img = "0.2.0"
 
 调用契约（命令名 / 参数 / 返回 / 错误码）落在 `z-biz-tool-shared/src/capability/`，
 经 npm `z-biz-tool-shared` 的 `./capability` 子路径导出给 JS 侧。
+
+### cap-img 的输出格式规则（0.3.0 起）
+
+**文件名不许说谎**：
+
+- `save_bytes` / `export`：`format` 参数与目标扩展名必须一致，否则**拒绝**；
+- `resize` / `rotate` / `flip` / `crop` / `apply_filter`：**目标扩展名**决定输出格式
+  （此前按源图扩展名 ⇒ 目标叫 `.jpg` 的文件里装着 PNG 字节）；
+- 目标扩展名认不出来 ⇒ **报错**，不悄悄写成 PNG；
+- 目标路径**无扩展名**时，才回落源图格式（调用方明确要无后缀文件）。
+
+写入 JPEG 时会先降到 RGB —— JPEG 没有 alpha 通道。
 
 ## 红线（矩阵规划 03 §9）
 

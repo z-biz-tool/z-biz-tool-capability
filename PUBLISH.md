@@ -13,7 +13,10 @@
 - CI 三平台（macOS / Ubuntu / Windows）cargo test + clippy 已全绿，tag `v0.1.0`、`v0.1.1` 已打。
 - 消费方现状：`z-biz-tool-file` 用 git 依赖 `cap-img = { git = "...", tag = "v0.1.1" }`；
   `z-biz-tool-shared` 0.1.1 已加 `./capability` 导出但**未发 npm**。
-- 名字可用性已核验：crates.io 上 `cap-img` / `cap-audio` / `cap-video` 均 404（可注册）。
+- 名字可用性已核验：crates.io 上 `cap-img` / `cap-audio` / `cap-video` ~~均 404（可注册）~~。
+  > **2026-10-20 订正**：这句话**现在只对了一半** —— `cap-img` 已发布 0.2.0（HTTP 200），
+  > `cap-audio` / `cap-video` 仍 404（**仍可注册，名字仍敞着**）。
+  > 2026-10-20 复测，与 2026-10-04 初测一致。
 
 ---
 
@@ -76,6 +79,18 @@ cargo publish -p cap-img          # 真发布
 
 **状态：** [x] 完成（2026-09-25）：`cargo publish -p cap-img` 发布 **0.1.0** 与 **0.2.0**，
 干净项目 `cargo add cap-img` 实测可拉取并编译。
+
+> **2026-10-20 追加：0.3.0 已备好但**未发布**。**
+> 本轮 cap-img 行为收紧（输出格式改由目标扩展名决定、`export` 新增格式/扩展名一致性校验、
+> 目标扩展名认不出时报错、修两个 panic）⇒ 对调用方是**破坏性变更**。
+> crates.io 的版本号**不可覆盖、不可删除**，0.x 语义下 minor 即 breaking
+> ⇒ 不能复用 0.2.0，必须 bump 到 **0.3.0**。
+> 仓内 `crates/cap-img/Cargo.toml` 已是 0.3.0；**crates.io 上的现行版本仍是 0.2.0**。
+> 发布前检查单照阶段 2 走（版本号 = 0.3.0、`cargo package` 只含预期文件）。
+> 影响面已核：aigen / note / remote 用的全是**字节级原语**（decode_data_url /
+> encode_frame_jpeg / sniff_format / mime 映射），**未受影响**；
+> 只有 file 仓用到变换族，且它 lock 的是 0.1.0，升级需显式改依赖号。
+> 详见 `doc/优化方案/08_本轮深度优化实施记录.md` §8.5。
 
 ---
 

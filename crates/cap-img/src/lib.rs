@@ -23,7 +23,6 @@ pub struct ImageInfo {
 
 /// 获取图片信息
 pub fn info(path: impl AsRef<Path>) -> Result<ImageInfo, String> {
-    
     let metadata = fs::metadata(path.as_ref()).map_err(|e| format!("读取元数据失败: {}", e))?;
     let size = metadata.len();
 
@@ -101,7 +100,12 @@ fn parse_exif_minimal(data: &[u8]) -> std::collections::HashMap<String, String> 
     };
 
     let ifd0_offset = read_u32(&data[4..8]) as usize;
-    if ifd0_offset >= data.len() {
+    // 越界检查必须覆盖**要读的整个区间**，不是只比起点。
+    // 原先只判 `ifd0_offset >= data.len()`，于是 offset == len-1 时
+    // `data[offset..offset+2]` 直接切片越界 panic —— 而这个 offset 是**图片文件里
+    // 的字节**，任何人都能手搓一个 JPEG 触发。实测：塞一段 offset=8、长度 9 的
+    // EXIF 进真 JPEG，`info()` 直接 panic（不是返回 Err）。
+    if ifd0_offset + 2 > data.len() {
         return map;
     }
     let ifd0_count = read_u16(&data[ifd0_offset..ifd0_offset + 2]) as usize;
@@ -195,19 +199,50 @@ pub fn thumbnail(path: impl AsRef<Path>, max_size: u32) -> Result<ImageThumbnail
     use base64::Engine;
     let data = base64::engine::general_purpose::STANDARD.encode(&buf);
 
-    Ok(ImageThumbnail { data, width, height })
+    Ok(ImageThumbnail {
+        data,
+        width,
+        height,
+    })
 }
 
 /// 导出图片为指定格式
-pub fn export(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, format: &str, quality: u8) -> Result<(), String> {
+///
+/// `format` 与目标扩展名必须一致（jpeg 别名 .jpg/.jpeg 均可），否则**拒绝**：
+/// 两者不一致时写出来的文件「名字说谎」——叫 .png 的文件里装的是 JPEG 字节。
+/// `save_bytes` 早就有这条规则，export 之前没有。
+pub fn export(
+    path: impl AsRef<Path>,
+    dest_path: impl AsRef<Path>,
+    format: &str,
+    quality: u8,
+) -> Result<(), String> {
     let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
-    // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
     let dest = dest_path.as_ref();
+
+    let image_format = parse_format(format)?;
+    // 格式与目标扩展名对不上 ⇒ 拒绝（与 save_bytes 同一规则）
+    let want = match format.to_ascii_lowercase().as_str() {
+        "jpeg" | "jpg" => vec![".jpg".to_string(), ".jpeg".to_string()],
+        other => vec![format!(".{}", other)],
+    };
+    let ext = dest
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy().to_ascii_lowercase()))
+        .unwrap_or_default();
+    if !want.contains(&ext) {
+        return Err(format!(
+            "目标扩展名与所选格式不符: {} vs {}",
+            dest.display(),
+            format
+        ));
+    }
+
+    // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
 
-    let image_format = parse_format(format)?;
     let quality = quality.clamp(1, 100);
 
     match image_format {
@@ -235,7 +270,12 @@ pub fn export(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, format: &str,
 }
 
 /// 缩放图片
-pub fn resize(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, width: u32, height: u32) -> Result<(), String> {
+pub fn resize(
+    path: impl AsRef<Path>,
+    dest_path: impl AsRef<Path>,
+    width: u32,
+    height: u32,
+) -> Result<(), String> {
     let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     let resized = img.resize(width, height, image::imageops::FilterType::Lanczos3);
 
@@ -243,7 +283,11 @@ pub fn resize(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, width: u32, h
 }
 
 /// 旋转图片
-pub fn rotate(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, degrees: u32) -> Result<(), String> {
+pub fn rotate(
+    path: impl AsRef<Path>,
+    dest_path: impl AsRef<Path>,
+    degrees: u32,
+) -> Result<(), String> {
     let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     let rotated = match degrees {
         90 => img.rotate90(),
@@ -256,7 +300,11 @@ pub fn rotate(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, degrees: u32)
 }
 
 /// 翻转图片
-pub fn flip(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, horizontal: bool) -> Result<(), String> {
+pub fn flip(
+    path: impl AsRef<Path>,
+    dest_path: impl AsRef<Path>,
+    horizontal: bool,
+) -> Result<(), String> {
     let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     let flipped = if horizontal { img.fliph() } else { img.flipv() };
 
@@ -264,11 +312,27 @@ pub fn flip(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, horizontal: boo
 }
 
 /// 裁剪图片
-pub fn crop(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, x: u32, y: u32, w: u32, h: u32) -> Result<(), String> {
+pub fn crop(
+    path: impl AsRef<Path>,
+    dest_path: impl AsRef<Path>,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+) -> Result<(), String> {
     let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
 
-    // 验证裁剪区域
-    if x + w > img.width() || y + h > img.height() {
+    // 验证裁剪区域。
+    //
+    // `x + w` 在 debug 下溢出即 panic，release 下回绕成小值 ⇒ 越界检查被绕过，
+    // 于是裁剪区域"看起来合法"却真的裁到了图外。x/y 来自调用方（file 仓的
+    // crop_image 命令直接透传前端参数），不是内部常量。
+    // 修法：用 checked_add，溢出与超范围走同一条错误出口。
+    let (x_end, y_end) = match (x.checked_add(w), y.checked_add(h)) {
+        (Some(xe), Some(ye)) => (xe, ye),
+        _ => return Err(format!("裁剪区域尺寸溢出: 裁剪({},{})+{}x{}", x, y, w, h)),
+    };
+    if x_end > img.width() || y_end > img.height() {
         return Err(format!(
             "裁剪区域超出图片范围: 图片{}x{}, 裁剪({},{})+{}x{}",
             img.width(),
@@ -285,25 +349,85 @@ pub fn crop(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, x: u32, y: u32,
 }
 
 /// 应用滤镜
-pub fn apply_filter(path: impl AsRef<Path>, dest_path: impl AsRef<Path>, filter_name: &str) -> Result<(), String> {
+pub fn apply_filter(
+    path: impl AsRef<Path>,
+    dest_path: impl AsRef<Path>,
+    filter_name: &str,
+) -> Result<(), String> {
     let img = image::open(path.as_ref()).map_err(|e| format!("打开图片失败: {}", e))?;
     let filtered = filter_impl(&img, filter_name)?;
     save_like_source(path, dest_path, &filtered)
 }
 
-/// 按"源图扩展名决定输出格式"保存——resize/rotate/flip/crop/filter 共用的收尾
-fn save_like_source(src: impl AsRef<Path>, dest_path: impl AsRef<Path>, img: &DynamicImage) -> Result<(), String> {
+/// 按"**目标扩展名**决定输出格式"保存——resize/rotate/flip/crop/filter 共用的收尾
+///
+/// 原先按**源图**扩展名决定输出格式，于是 `resize("a.png", "out.jpg")` 往 out.jpg 里
+/// 写的是 PNG 字节：文件名字说自己是 JPEG，内容却是 PNG。
+/// `save_bytes` 早就因为同一个理由拒绝「扩展名与格式不符」（见其文档注释），
+/// 变换族却没跟上——同一个 crate 里两套规则。
+///
+/// 改法：目标路径有扩展名就按它决定输出格式；没有扩展名（调用方要的就是一个
+/// 无后缀文件）才回落源图格式。目标扩展名认不出来时**报错**而不是悄悄写 PNG——
+/// 悄悄写就是又一次「名字说谎」。
+fn save_like_source(
+    src: impl AsRef<Path>,
+    dest_path: impl AsRef<Path>,
+    img: &DynamicImage,
+) -> Result<(), String> {
     // 先校验再建目录：反过来会替调用方把 .ssh 这类敏感目录凭空创建出来
     let dest = dest_path.as_ref();
+
+    let image_format = match dest.extension() {
+        Some(ext) => {
+            let ext = ext.to_string_lossy().to_ascii_lowercase();
+            parse_format(&ext).map_err(|_| {
+                format!(
+                    "目标扩展名不受支持: {}（支持: jpg/jpeg/png/gif/bmp/webp/ico/tiff/tif）",
+                    ext
+                )
+            })?
+        }
+        None => {
+            // 无扩展名 ⇒ 沿用源图格式（调用方明确要一个无后缀文件）
+            let format = detect_format(src);
+            parse_format(&format).unwrap_or(ImageFormat::Png)
+        }
+    };
+
     if let Some(parent) = dest.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建目录失败: {}", e))?;
     }
 
-    let format = detect_format(src);
-    let image_format = parse_format(&format).unwrap_or(ImageFormat::Png);
-    img.save_with_format(dest, image_format)
-        .map_err(|e| format!("保存图片失败: {}", e))?;
+    save_with_format_checked(img, dest, image_format)
+}
 
+/// 按指定格式落盘；JPEG 走显式编码器以便控制质量，其余交给 image crate。
+fn save_with_format_checked(
+    img: &DynamicImage,
+    dest: &Path,
+    image_format: ImageFormat,
+) -> Result<(), String> {
+    match image_format {
+        ImageFormat::Jpeg => {
+            // JPEG 无 alpha 通道：必须先降到 RGB，否则带 alpha 的源图存出来是坏的
+            let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(
+                fs::File::create(dest).map_err(|e| format!("创建文件失败: {}", e))?,
+                90,
+            );
+            encoder
+                .encode(
+                    img.to_rgb8().as_raw(),
+                    img.width(),
+                    img.height(),
+                    image::ExtendedColorType::Rgb8,
+                )
+                .map_err(|e| format!("编码JPEG失败: {}", e))?;
+        }
+        _ => {
+            img.save_with_format(dest, image_format)
+                .map_err(|e| format!("保存图片失败: {}", e))?;
+        }
+    }
     Ok(())
 }
 
@@ -349,12 +473,9 @@ fn filter_impl(img: &DynamicImage, filter_name: &str) -> Result<DynamicImage, St
             let mut rgba = img.to_rgba8();
             let factor: f32 = 1.5; // 对比度因子
             for pixel in rgba.pixels_mut() {
-                pixel[0] = (factor * (pixel[0] as f32 - 128.0) + 128.0)
-                    .clamp(0.0, 255.0) as u8;
-                pixel[1] = (factor * (pixel[1] as f32 - 128.0) + 128.0)
-                    .clamp(0.0, 255.0) as u8;
-                pixel[2] = (factor * (pixel[2] as f32 - 128.0) + 128.0)
-                    .clamp(0.0, 255.0) as u8;
+                pixel[0] = (factor * (pixel[0] as f32 - 128.0) + 128.0).clamp(0.0, 255.0) as u8;
+                pixel[1] = (factor * (pixel[1] as f32 - 128.0) + 128.0).clamp(0.0, 255.0) as u8;
+                pixel[2] = (factor * (pixel[2] as f32 - 128.0) + 128.0).clamp(0.0, 255.0) as u8;
             }
             Ok(DynamicImage::ImageRgba8(rgba))
         }
@@ -369,11 +490,14 @@ fn filter_impl(img: &DynamicImage, filter_name: &str) -> Result<DynamicImage, St
                 if let Some(blurred_pixel) = blurred_vec.get(i) {
                     // Unsharp mask: original + (original - blurred) * amount
                     let amount: f32 = 1.5;
-                    pixel[0] = (pixel[0] as f32 + (pixel[0] as f32 - blurred_pixel[0] as f32) * amount)
+                    pixel[0] = (pixel[0] as f32
+                        + (pixel[0] as f32 - blurred_pixel[0] as f32) * amount)
                         .clamp(0.0, 255.0) as u8;
-                    pixel[1] = (pixel[1] as f32 + (pixel[1] as f32 - blurred_pixel[1] as f32) * amount)
+                    pixel[1] = (pixel[1] as f32
+                        + (pixel[1] as f32 - blurred_pixel[1] as f32) * amount)
                         .clamp(0.0, 255.0) as u8;
-                    pixel[2] = (pixel[2] as f32 + (pixel[2] as f32 - blurred_pixel[2] as f32) * amount)
+                    pixel[2] = (pixel[2] as f32
+                        + (pixel[2] as f32 - blurred_pixel[2] as f32) * amount)
                         .clamp(0.0, 255.0) as u8;
                 }
             }
@@ -388,7 +512,8 @@ fn filter_impl(img: &DynamicImage, filter_name: &str) -> Result<DynamicImage, St
 
 /// 按扩展名检测图片格式（返回小写规范名，未知扩展名默认 png）
 pub fn detect_format(path: impl AsRef<Path>) -> String {
-    let ext = path.as_ref()
+    let ext = path
+        .as_ref()
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
         .unwrap_or_default();
@@ -483,8 +608,7 @@ pub fn encode_data_url(bytes: &[u8], mime: &str) -> String {
 /// MIME → 扩展名（`image/jpeg` → `jpg`，`image/svg+xml` → `svg`，认不出 → `png`）
 pub fn ext_for_mime(mime: &str) -> String {
     let mime = mime.to_ascii_lowercase();
-    mime
-        .split_once('/')
+    mime.split_once('/')
         .map(|(_, sub)| match sub {
             "jpeg" | "jpg" => "jpg".to_string(),
             other => other.split('+').next().unwrap_or("png").to_string(),
