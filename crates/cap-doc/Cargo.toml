@@ -1,0 +1,20 @@
+[package]
+name = "cap-doc"
+version = "0.1.0"
+edition = "2021"
+description = "文档处理原语：PDF 页/文本/合并/拆分/压缩/水印 + EPUB/MOBI 解析（路径进→结构出，无状态）"
+license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["pdf", "epub", "mobi", "document", "parse"]
+categories = ["parser-implementations", "text-processing"]
+
+[dependencies]
+lopdf = { workspace = true }
+zip = { workspace = true }
+flate2 = { workspace = true }
+image = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = "1"

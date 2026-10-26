@@ -8,6 +8,28 @@ members = ["crates/*"]
 image = "0.25"
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# cap-doc（GAP-06 补齐：文档解析原语）——版本与 z-biz-tool-file/src-tauri 保持一致，
+# 搬迁期间两边可以字节级对账；file 接入后由本表作为唯一版本源。
+lopdf = { version = "0.34", features = ["pom_parser"] }
+zip = { version = "9", features = ["deflate64", "lzma", "xz"] }
+flate2 = "1"
+
+# cap-llm（统一 AI 接入层）—— 上面那句「reqwest 分裂不再重演」写在这里很久了，
+# 但 workspace.dependencies 里一直没有 reqwest，所以分裂一直在。本表从此刻起是唯一版本源：
+#
+#   reqwest 0.12（aigen/file/kb/note/pet/db/box）× 0.13（worker 一家）
+#   TLS：rustls-tls（aigen/file）vs 默认 native-tls（其余）—— 两套 TLS 后端会被同时编进去
+#
+# 统一到 0.12 + rustls-tls：不依赖系统 OpenSSL（Linux 上不用装 libssl-dev），
+# 且三平台证书行为一致。worker 迁过来时它的 0.13 也一并收回。
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
 
 [profile.release]
 strip = true

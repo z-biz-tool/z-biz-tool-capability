@@ -1,0 +1,15 @@
+[package]
+name = "cap-llm"
+version = "0.1.0"
+edition = "2021"
+description = "z-biz-tool 统一 AI 接入层：OpenAI 兼容 / Anthropic / Gemini / Ollama 的 chat、流式、模型列表与连通性探测"
+license = "MIT"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
