@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "z-biz-tool 统一 AI 接入层：OpenAI 兼容 / Anthropic / Gemini / Ollama 的 chat、流式、模型列表与连通性探测"
 license = "MIT"
+# 与 cap-img / cap-doc 保持一致：crates.io 页面上没有仓库链接的 crate 看起来像
+# 随手扔上来的（`cargo publish` 会为缺这三项单独告警）。发版前补齐。
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["llm", "openai", "anthropic", "gemini", "ollama"]
+categories = ["api-bindings"]
 
 [dependencies]
 serde = { workspace = true }
