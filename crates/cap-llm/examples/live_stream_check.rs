@@ -37,6 +37,7 @@ async fn main() {
         timeout: Duration::from_secs(60),
         temperature: Some(0.2),
         max_tokens: Some(64),
+        preset: None,
     };
 
     let mut failed = false;

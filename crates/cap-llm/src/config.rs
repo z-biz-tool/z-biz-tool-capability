@@ -78,19 +78,34 @@ impl ProviderKind {
             "ollama" => Ok(Self::Ollama),
             "minimax" | "minimaxi" => Ok(Self::MiniMax),
             // custom 是 file/terminal/pet 里都出现过的兜底值
-            "custom" | "openai-compatible" | "openai_compatible" | "local"
-            | "deepseek" | "qwen" | "dashscope" | "moonshot" | "zhipu" | "bigmodel"
-            | "siliconflow" | "volces" | "ark" => Ok(Self::Custom),
+            "custom" | "openai-compatible" | "openai_compatible" | "local" | "deepseek"
+            | "qwen" | "dashscope" | "moonshot" | "zhipu" | "bigmodel" | "siliconflow"
+            | "volces" | "ark" => Ok(Self::Custom),
             "" => Err(LlmError::not_configured(
                 "未选择 AI 提供商（provider 为空）",
             )),
-            other => Err(LlmError::new(
-                crate::error::ErrorKind::Unsupported,
-                format!(
+            other => {
+                // 老表里没有的名字，去预设目录问一次。
+                //
+                // 这样 "kimi" / "glm" / "doubao" 这类**别名**也能用 ——
+                // 它们是用户会输入的词（尤其在中文界面里选了「Kimi（月之暗面）」之后），
+                // 却不在十套历史实现留下的老表里。走预设目录补齐，
+                // 且协议族由预设自己给出，不会猜。
+                //
+                // ⚠️ 但要挡住 "local"：它在老表里是 Custom（已命中上面的分支），
+                // 在预设目录里却是 Ollama。老表优先，所以不会走到这里 ———
+                // 这一层只处理老表**完全不认识**的名字。
+                if let Some(p) = crate::presets::find_by_name(other) {
+                    return Ok(p.kind);
+                }
+                Err(LlmError::new(
+                    crate::error::ErrorKind::Unsupported,
+                    format!(
                     "未知的 AI 提供商：{}。支持 openai / anthropic / gemini / ollama / minimax / custom",
                     truncate_chars(other, 40)
                 ),
-            )),
+                ))
+            }
         }
     }
 
@@ -101,6 +116,44 @@ impl ProviderKind {
             Self::Gemini => Protocol::Gemini,
             Self::Ollama => Protocol::Ollama,
         }
+    }
+
+    /// 解析 provider 字符串，**同时解析出预设身份**。
+    ///
+    /// 这是 [`ProviderKind::parse`] 的超集，推荐新代码用它：
+    ///
+    /// ```text
+    /// "deepseek"  → (Custom, Some("deepseek"))
+    /// "openai"    → (OpenAi, Some("openai"))
+    /// "custom"    → (Custom, None)     ← 通用兜底，没有预设
+    /// ```
+    ///
+    /// 为什么要多这一步：用户配置里写 `"deepseek"`，`ProviderKind::parse`
+    /// 只能告诉他「你是 OpenAI 兼容族」，但**地址**还得自己去查。
+    /// 带上预设 id 之后，`base_url` 留空也能自动填对地址。
+    ///
+    /// 别名优先走预设目录（`claude` → `anthropic` 预设），
+    /// 目录里没有的再回落到 [`ProviderKind::parse`] 的老逻辑。
+    pub fn parse_with_preset(raw: &str) -> Result<(Self, Option<&'static str>), LlmError> {
+        let key = raw.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            return Err(LlmError::not_configured(
+                "未选择 AI 提供商（provider 为空）",
+            ));
+        }
+        // ⚠️ 顺序很重要：**先**用老逻辑定协议族，**再**看预设。
+        //
+        // 原因：「local」在两处含义不同 ——
+        //   - `parse` 的历史表里，"local" = 自定义 OpenAI 兼容地址（file/terminal 存量配置）
+        //   - presets 的别名里，"local" = Ollama
+        // 若先查 presets，存量配置里的 "local" 会被悄悄改成 Ollama，
+        // 请求从用户自己的自建代理改打到 localhost:11434 —— 静默改路由，
+        // 比报错更难查。所以协议族以 `parse` 为准，预设只做补充。
+        let kind = Self::parse(raw)?;
+        // 只有当预设的协议族与解析结果一致时才采纳预设，
+        // 避免 "local" 这种歧义别名被错误绑定。
+        let preset = crate::presets::find_by_name(&key).filter(|p| p.kind == kind);
+        Ok((kind, preset.map(|p| p.id)))
     }
 
     /// 默认 baseUrl。`Custom` 返回空串 —— **刻意不猜**。
@@ -148,6 +201,19 @@ pub struct LlmConfig {
     /// `None` 表示不带该字段（让服务端用默认值），而不是发一个 0.7。
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    /// 供应商预设 id（见 [`crate::presets`]），可选。
+    ///
+    /// 存在时的作用只有一个：当 `base_url` 为空时，
+    /// 用预设里的服务地址兜底（而不是报「请填写 Base URL」）。
+    ///
+    /// 为什么是可选字段而不是新增 [`ProviderKind`] 变体：消费方
+    /// （note / terminal / mind / file）各自维护了一份 provider 映射，
+    /// 新增枚举变体会让它们全部要改。而协议上 deepseek / qwen / moonshot
+    /// 与 OpenAI 兼容族毫无差别 —— 报文、鉴权、流式格式完全一致，
+    /// 差别只在**地址**，而地址正是预设提供的东西。
+    ///
+    /// 留空 = 老行为（地址必须自己填），存量配置零影响。
+    pub preset: Option<&'static str>,
 }
 
 impl Default for LlmConfig {
@@ -160,6 +226,7 @@ impl Default for LlmConfig {
             timeout: Duration::from_secs(60),
             temperature: None,
             max_tokens: None,
+            preset: None,
         }
     }
 }
@@ -175,9 +242,18 @@ pub enum Action {
 
 impl LlmConfig {
     /// 解析出实际使用的 baseUrl。
+    ///
+    /// 三级回落：
+    /// 1. `base_url` 有值 → 用它（用户显式填的，永远优先）
+    /// 2. `base_url` 为空 + 有预设 → 用预设里的地址
+    /// 3. `base_url` 为空 + 无预设 → 用 [`ProviderKind::default_base_url`]；
+    ///    该值为空（`Custom`）则报错
     fn resolved_base(&self) -> Result<String, LlmError> {
         let raw = if self.base_url.trim().is_empty() {
-            self.kind.default_base_url()
+            // ② 预设兜底：选了「DeepSeek」就自动填好它的地址，
+            //    不必让用户手抄一遍 —— 抄错一个字符就是 404。
+            self.preset_base_url()
+                .unwrap_or_else(|| self.kind.default_base_url())
         } else {
             self.base_url.trim()
         };
@@ -188,6 +264,12 @@ impl LlmConfig {
             )));
         }
         Ok(strip_trailing_slash(raw))
+    }
+
+    /// 预设里登记的服务地址。没有预设、或预设 id 查不到时返回 `None`。
+    fn preset_base_url(&self) -> Option<&'static str> {
+        let id = self.preset?;
+        crate::presets::find(id).map(|p| p.base_url)
     }
 
     /// 校验配置是否足以发请求。**在发请求之前调用**，这样「没配 key」
@@ -265,10 +347,9 @@ impl LlmConfig {
             Protocol::Gemini => {
                 let root = ensure_version(&base, "/v1beta");
                 Ok(match action {
-                    Action::Chat => format!(
-                        "{root}/models/{}:generateContent",
-                        encode_path(&self.model)
-                    ),
+                    Action::Chat => {
+                        format!("{root}/models/{}:generateContent", encode_path(&self.model))
+                    }
                     Action::Models => format!("{root}/models"),
                 })
             }
@@ -284,8 +365,9 @@ impl LlmConfig {
     pub fn stream_endpoint(&self) -> Result<String, LlmError> {
         let base = self.endpoint(Action::Chat)?;
         Ok(match self.kind.protocol() {
-            Protocol::Gemini => base.replace(":generateContent", ":streamGenerateContent")
-                + "?alt=sse",
+            Protocol::Gemini => {
+                base.replace(":generateContent", ":streamGenerateContent") + "?alt=sse"
+            }
             _ => base,
         })
     }
@@ -380,6 +462,102 @@ mod tests {
         assert!(err.message.contains("some-new-vendor"));
     }
 
+    // ── 预设接线（2026-10-28）──────────────────────────────────
+
+    #[test]
+    fn parse_with_preset_finds_preset_for_known_vendors() {
+        for (raw, want_kind, want_preset) in [
+            ("deepseek", ProviderKind::Custom, Some("deepseek")),
+            ("qwen", ProviderKind::Custom, Some("qwen")),
+            ("kimi", ProviderKind::Custom, Some("moonshot")),
+            ("glm", ProviderKind::Custom, Some("zhipu")),
+            ("doubao", ProviderKind::Custom, Some("volcengine")),
+            ("openai", ProviderKind::OpenAi, Some("openai")),
+            ("claude", ProviderKind::Anthropic, Some("anthropic")),
+            ("gemini", ProviderKind::Gemini, Some("gemini")),
+            ("ollama", ProviderKind::Ollama, Some("ollama")),
+        ] {
+            let (kind, preset) = ProviderKind::parse_with_preset(raw).unwrap();
+            assert_eq!(kind, want_kind, "raw={raw}");
+            assert_eq!(preset, want_preset, "raw={raw}");
+        }
+    }
+
+    #[test]
+    fn parse_with_preset_keeps_custom_without_preset() {
+        // "custom" 没有对应预设 —— 地址必须用户自己填
+        let (kind, preset) = ProviderKind::parse_with_preset("custom").unwrap();
+        assert_eq!(kind, ProviderKind::Custom);
+        assert_eq!(preset, None);
+    }
+
+    #[test]
+    fn parse_with_preset_does_not_rebind_local() {
+        // ⚠️ 这条最容易出事：
+        // "local" 在历史配置里 = 自定义 OpenAI 兼容地址（file/terminal 存量），
+        // 在 presets 别名里 = Ollama。若预设优先，存量配置会被静默改路由到
+        // localhost:11434 —— 请求打到了另一个服务，且没有任何提示。
+        let (kind, preset) = ProviderKind::parse_with_preset("local").unwrap();
+        assert_eq!(
+            kind,
+            ProviderKind::Custom,
+            "local 的协议族不该被改成 Ollama"
+        );
+        assert_eq!(preset, None, "local 不该绑定到 ollama 预设");
+    }
+
+    #[test]
+    fn preset_fills_base_url_when_empty() {
+        // 这是本轮改动的主目的：选了 DeepSeek 就不必手抄地址
+        let c = LlmConfig {
+            kind: ProviderKind::Custom,
+            base_url: String::new(),
+            api_key: "sk-test-1234567890".into(),
+            model: "deepseek-chat".into(),
+            preset: Some("deepseek"),
+            ..Default::default()
+        };
+        assert_eq!(
+            c.endpoint(Action::Chat).unwrap(),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn explicit_base_url_wins_over_preset() {
+        // 用户显式填的地址永远优先 —— 预设只是兜底
+        let c = LlmConfig {
+            kind: ProviderKind::Custom,
+            base_url: "https://my-proxy.corp/v1".into(),
+            api_key: "k".into(),
+            model: "m".into(),
+            preset: Some("deepseek"),
+            ..Default::default()
+        };
+        assert_eq!(
+            c.endpoint(Action::Chat).unwrap(),
+            "https://my-proxy.corp/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn custom_without_preset_or_base_url_still_errors() {
+        // 老行为不变：没有预设也没有地址 → 报错，不猜
+        let c = cfg(ProviderKind::Custom, "");
+        let err = c.validate().unwrap_err();
+        assert_eq!(err.kind, crate::error::ErrorKind::NotConfigured);
+    }
+
+    #[test]
+    fn unknown_preset_id_is_ignored_not_fatal() {
+        // 配置里的预设 id 可能是老版本留下的、目录里已经没有的。
+        // 不该因此让整个配置报废 —— 退化到「必须手填地址」即可。
+        let mut c = cfg(ProviderKind::Custom, "");
+        c.preset = Some("vendor-from-the-future");
+        let err = c.validate().unwrap_err();
+        assert_eq!(err.kind, crate::error::ErrorKind::NotConfigured);
+    }
+
     #[test]
     fn openai_endpoint_adds_version_when_absent() {
         // pet 的写法：base 不带 /v1
@@ -461,7 +639,10 @@ mod tests {
             c.endpoint(Action::Chat).unwrap(),
             "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent"
         );
-        assert!(c.stream_endpoint().unwrap().contains(":streamGenerateContent"));
+        assert!(c
+            .stream_endpoint()
+            .unwrap()
+            .contains(":streamGenerateContent"));
         assert!(c.stream_endpoint().unwrap().ends_with("?alt=sse"));
     }
 

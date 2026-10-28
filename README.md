@@ -19,6 +19,7 @@ crates/
 │                 / 内嵌图提取 + EPUB / MOBI 章节解析与封面（6,448 行，2026-10-26 从 file 搬迁）
 └── cap-llm/      AI 接入：OpenAI 兼容 / Anthropic / Gemini / Ollama 四协议归一，
                   chat / 流式 / 模型列表 / 连通性探测（2026-10-26 归并十套实现）
+                  + 供应商预设目录（17 条，2026-10-28，借鉴 cc-switch）
 ```
 
 ### 两类 crate，两种约束
@@ -94,7 +95,7 @@ file 的 `path_guard` 在 `doc_cmd.rs` 里前置执行（与 `cap-img` 的约定
 
 **在的**：provider 地址归一（容忍 base URL 带或不带 `/v1`、误粘完整 endpoint）、
 四种协议的鉴权与报文构造、响应解析、SSE 流式解码、错误分类、密钥脱敏、
-模型列表、连通性探测。
+模型列表、连通性探测、**供应商预设目录**（见下节）。
 
 **不在的**：
 - **提示词**。「你是简洁的文件摘要助手」属于 file，「按目录生成报告」属于 db ——
@@ -118,7 +119,69 @@ file 的 `path_guard` 在 `doc_cmd.rs` 里前置执行（与 `cap-img` 的约定
    是最难查的一类故障（shared 仓 01/A-11 记录过这个病）。
 
 可单测性靠「协议层与传输层分离」保证：`wire`（报文构造/解析）与 `sse`（解码）
-完全不碰网络，68 条单测零网络、零 mock。
+完全不碰网络，108 条单测零网络、零 mock。
+
+### 供应商预设目录（2026-10-28 新增）
+
+> 设计参考：**cc-switch**（`farion1231/cc-switch`）的 preset 模型。
+
+**它解决什么问题**：`ProviderKind::parse` 把 `deepseek` / `qwen` / `moonshot` /
+`zhipu` 等 7 家一律归为 `Custom`，而 `Custom` 的默认地址**刻意留空**
+（不猜服务地址）。于是用户在任何产品里选「DeepSeek」，都得自己手抄
+`https://api.deepseek.com/v1` —— 抄错一个字符就是 404，而报错只说「404」。
+
+cc-switch 的做法是内置 90+ 预设：选中一家，地址协议一起填好，用户只补 Key。
+本 crate 是同一思路的家族版，内置 **17 条**（国际 4 / 国内 10 / 聚合 2 / 自建 1）。
+
+```rust
+use cap_llm::preset::{find, PRESETS};
+
+for p in PRESETS {
+    println!("{} → {}", p.label, p.base_url);   // "DeepSeek → https://api.deepseek.com/v1"
+}
+
+// 选中一家 → 造配置 → 补 key 与模型名
+let cfg = find("deepseek").unwrap().to_config("sk-...", "deepseek-chat");
+
+// 或者从 provider 字符串一步到位（存量配置直接受益）
+let (kind, preset) = cap_llm::ProviderKind::parse_with_preset("deepseek")?;
+assert_eq!(preset, Some("deepseek"));
+```
+
+**接线方式**：`LlmConfig` 新增可选字段 `preset: Option<&'static str>`。
+当 `base_url` 为空而 `preset` 有值时，用预设里的地址兜底；
+用户显式填的地址**永远优先**。留空 = 老行为，存量配置零影响。
+
+⚠️ **一条硬规矩：预设不写死模型名。**
+只提供「哪一家 + 什么协议 + 什么地址」，模型名由调用方在运行时
+用 `list_models` 现取。原因（2026-10-28 实测）：各家模型生命周期只有数月到一年 ——
+OpenAI 在 2026 年内已从 `gpt-4o` 走到 `gpt-5.6`，`gpt-4o` 已进入 2027-01 的关停名单；
+Gemini 的 `gemini-2.5-pro` 在 2026-10-20 就退役。预设里写死模型名 = 半年后
+用户点了预设直接拿到一个已关停的模型。
+
+⚠️ **另一条硬规矩：预设不新增 `ProviderKind` 变体。**
+所有 OpenAI 兼容厂商共用 `Custom` 协议族，靠 `base_url` 区分服务地址。
+理由：消费方（note / terminal / mind / file）各自维护了一份 provider 映射，
+新增枚举变体会让它们全部要改；而协议上它们毫无差别 —— 报文、鉴权、流式格式完全一致。
+
+⚠️ **「local」不绑定预设。** 它在历史配置里 = 自定义 OpenAI 兼容地址
+（file / terminal 存量配置），在预设别名里 = Ollama。老表优先，
+否则存量配置会被静默改路由到 `localhost:11434` —— 静默改路由比报错更难查。
+这条有专门的单测钉死（`parse_with_preset_does_not_rebind_local`）。
+
+**地址准确性**：每条预设带 `verified_on`（核对日期，2026-10-28）。
+厂商会改地址（MiniMax 就有 `api.minimaxi.com` 与 `api.minimax.io` 双域名），
+这个字段是**可审计锚点** —— 超过半年没人复核的预设应在 UI 上标「可能已过期」，
+而不是让用户对着 404 猜。新增厂商必须同时更新它。
+
+**已接线的消费方**（2026-10-28）：
+
+| 仓 | 接线方式 |
+|---|---|
+| file | `to_cap` 用 `parse_with_preset`；`provider: "deepseek"` + 空 base_url → 自动补地址 |
+| terminal | `preset_id()` 按 provider 名绑定；`base_url` 校验在预设存在时放行 |
+| note | 前端无 provider 字段，改为**按 base_url 反查**预设身份（host 匹配 + 协议族校验） |
+| mind | 不绑定 —— 本仓约定「必须显式填写接口地址」（复刻方案 §3.13），预设会与该约定相悖 |
 
 ## 消费方式
 

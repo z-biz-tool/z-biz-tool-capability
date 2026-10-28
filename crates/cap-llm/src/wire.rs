@@ -789,6 +789,7 @@ mod tests {
             timeout: Duration::from_secs(30),
             temperature: Some(0.3),
             max_tokens: Some(100),
+            preset: None,
         }
     }
 

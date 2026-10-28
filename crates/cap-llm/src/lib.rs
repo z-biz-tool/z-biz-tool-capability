@@ -88,6 +88,7 @@ mod chat;
 mod config;
 mod error;
 mod message;
+mod presets;
 mod sse;
 mod wire;
 
@@ -96,6 +97,15 @@ pub use config::{Action, LlmConfig, Protocol, ProviderKind};
 pub use error::{redact, truncate_chars, ErrorKind, LlmError};
 pub use message::{ChatReply, Delta, Message, Role, ToolDef, Usage};
 
+/// 供应商预设目录（借鉴 cc-switch 的 preset 模型）。
+///
+/// 选一家 → 地址协议自动填好 → 只补 API Key 与模型名。
+pub mod preset {
+    pub use crate::presets::{
+        by_category, config_for, find, find_by_name, Category, ProviderPreset, PRESETS,
+    };
+}
+
 /// 协议层的高级入口。**大多数调用方用不到** —— 直接 `chat` / `chat_stream` 即可。
 ///
 /// 需要它们的场景是「自己控制传输」：例如某个产品想在请求之间插自定义重试、
@@ -103,8 +113,9 @@ pub use message::{ChatReply, Delta, Message, Role, ToolDef, Usage};
 /// 只借用报文构造与响应解析。
 pub mod protocol {
     pub use crate::wire::{
-        auth_headers, build_body as build_request_body, needs_query_key, parse_delta as parse_stream_delta,
-        parse_models as parse_model_list, parse_reply as parse_response,
+        auth_headers, build_body as build_request_body, needs_query_key,
+        parse_delta as parse_stream_delta, parse_models as parse_model_list,
+        parse_reply as parse_response,
     };
 }
 
