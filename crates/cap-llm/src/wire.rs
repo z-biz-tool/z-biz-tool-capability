@@ -104,6 +104,29 @@ pub fn build_body(cfg: &LlmConfig, messages: &[Message], stream: bool, tools: &[
                 .iter()
                 .filter(|m| m.role != Role::System)
                 .map(|m| {
+                    // 工具结果：Anthropic 没有 tool 角色 —— tool_result 块放在 user 消息里。
+                    // 连续多条 tool 结果会被服务端自动合并成一个 user 轮次。
+                    if m.role == Role::Tool {
+                        return json!({
+                            "role": "user",
+                            "content": [json!({
+                                "type": "tool_result",
+                                "tool_use_id": m.tool_call_id.clone().unwrap_or_default(),
+                                "content": m.content,
+                            })],
+                        });
+                    }
+                    // assistant 带工具调用：content 数组 = 可选 text 块 + tool_use 块
+                    if m.role == Role::Assistant && !m.tool_calls.is_empty() {
+                        let mut parts = Vec::new();
+                        if !m.content.is_empty() {
+                            parts.push(json!({ "type": "text", "text": m.content }));
+                        }
+                        for tc in &m.tool_calls {
+                            parts.push(openai_tool_call_to_claude_block(tc));
+                        }
+                        return json!({ "role": "assistant", "content": parts });
+                    }
                     // Claude 的视觉是 content 数组：text 块 + image 块（base64 source）
                     let content = if m.images.is_empty() {
                         json!(m.content)
@@ -155,6 +178,35 @@ pub fn build_body(cfg: &LlmConfig, messages: &[Message], stream: bool, tools: &[
                 .iter()
                 .filter(|m| m.role != Role::System)
                 .map(|m| {
+                    // 工具结果：Gemini 用 user 角色 + functionResponse part，
+                    // 按**函数名**配对（它没有 id 概念）
+                    if m.role == Role::Tool {
+                        return json!({
+                            "role": "user",
+                            "parts": [json!({
+                                "functionResponse": {
+                                    "name": m.tool_name.clone().unwrap_or_default(),
+                                    "response": { "result": m.content },
+                                }
+                            })],
+                        });
+                    }
+                    // assistant 带工具调用：model 角色 + functionCall part
+                    if m.role == Role::Assistant && !m.tool_calls.is_empty() {
+                        let mut parts = Vec::new();
+                        if !m.content.is_empty() {
+                            parts.push(json!({ "text": m.content }));
+                        }
+                        for tc in &m.tool_calls {
+                            parts.push(json!({
+                                "functionCall": {
+                                    "name": tc["function"]["name"].clone(),
+                                    "args": tool_call_args_object(tc),
+                                }
+                            }));
+                        }
+                        return json!({ "role": "model", "parts": parts });
+                    }
                     let mut parts = vec![json!({ "text": m.content })];
                     for img in &m.images {
                         parts.push(json!({
@@ -275,7 +327,16 @@ fn openai_messages(messages: &[Message]) -> Vec<Value> {
     messages
         .iter()
         .map(|m| {
-            if m.images.is_empty() {
+            // 工具结果：role:"tool" + tool_call_id。这是 OpenAI 的原生形态，
+            // 缺 tool_call_id 会被服务端 400（找不到对应的调用）。
+            if m.role == Role::Tool {
+                return json!({
+                    "role": "tool",
+                    "tool_call_id": m.tool_call_id.clone().unwrap_or_default(),
+                    "content": m.content,
+                });
+            }
+            let mut msg = if m.images.is_empty() {
                 json!({ "role": m.role.as_str(), "content": m.content })
             } else {
                 // OpenAI 视觉走 content 数组
@@ -287,7 +348,12 @@ fn openai_messages(messages: &[Message]) -> Vec<Value> {
                     }));
                 }
                 json!({ "role": m.role.as_str(), "content": parts })
+            };
+            // assistant 带工具调用时必须把 tool_calls 原样带回 —— 服务端按 id 配对后续 tool 结果
+            if m.role == Role::Assistant && !m.tool_calls.is_empty() {
+                msg["tool_calls"] = json!(m.tool_calls);
             }
+            msg
         })
         .collect()
 }
@@ -296,7 +362,15 @@ fn ollama_messages(messages: &[Message]) -> Vec<Value> {
     messages
         .iter()
         .map(|m| {
-            if m.images.is_empty() {
+            // Ollama 的 tool 结果也用 role:"tool"，但它按 tool_name 配对（无 id 字段）
+            if m.role == Role::Tool {
+                return json!({
+                    "role": "tool",
+                    "tool_name": m.tool_name.clone().unwrap_or_default(),
+                    "content": m.content,
+                });
+            }
+            let mut msg = if m.images.is_empty() {
                 json!({ "role": m.role.as_str(), "content": m.content })
             } else {
                 // Ollama 原生用 images 数组，元素是**纯 base64**（不带 data: 前缀）
@@ -305,9 +379,35 @@ fn ollama_messages(messages: &[Message]) -> Vec<Value> {
                     "content": m.content,
                     "images": m.images.iter().map(|i| strip_data_url(i)).collect::<Vec<_>>(),
                 })
+            };
+            if m.role == Role::Assistant && !m.tool_calls.is_empty() {
+                // Ollama 的 assistant 回显 tool_calls 时 arguments 用对象（与 OpenAI 的字符串不同）
+                let calls: Vec<Value> = m
+                    .tool_calls
+                    .iter()
+                    .map(normalize_ollama_tool_call_for_request)
+                    .collect();
+                msg["tool_calls"] = json!(calls);
             }
+            msg
         })
         .collect()
+}
+
+/// 请求方向的 Ollama tool_call：`arguments` 要**对象**。
+/// （响应方向是 [`normalize_ollama_tool_call`]，把对象转成字符串 —— 两者相反。）
+fn normalize_ollama_tool_call_for_request(v: &Value) -> Value {
+    let mut out = v.clone();
+    if let Some(f) = out.get_mut("function") {
+        if let Some(args) = f.get("arguments") {
+            if let Some(s) = args.as_str() {
+                if let Ok(parsed) = serde_json::from_str::<Value>(s) {
+                    f["arguments"] = parsed;
+                }
+            }
+        }
+    }
+    out
 }
 
 fn as_data_url(img: &str) -> String {
@@ -541,6 +641,27 @@ fn parse_openai_usage(u: &Value) -> Usage {
 }
 
 // ---------- tool_calls 归一（恒为 OpenAI 形状） ----------
+
+/// OpenAI 形状的 tool_call → Anthropic 的 `tool_use` 块（请求方向）。
+/// `arguments` 是 JSON **字符串**，Anthropic 的 `input` 要**对象** —— 转回去。
+fn openai_tool_call_to_claude_block(tc: &Value) -> Value {
+    json!({
+        "type": "tool_use",
+        "id": tc["id"].clone(),
+        "name": tc["function"]["name"].clone(),
+        "input": tool_call_args_object(tc),
+    })
+}
+
+/// 从 OpenAI 形状的 tool_call 里取出对象化的 arguments。
+/// 解析失败退回空对象 —— 宁可让模型看到「参数丢了」，也不能发非法 JSON。
+fn tool_call_args_object(tc: &Value) -> Value {
+    match tc["function"]["arguments"].as_str() {
+        Some(s) => serde_json::from_str::<Value>(s).unwrap_or_else(|_| json!({})),
+        // 有些网关直接给对象（不合规但常见）：原样用
+        None => tc["function"]["arguments"].clone(),
+    }
+}
 
 /// Anthropic 的 `tool_use` 块 → OpenAI tool_call。
 /// arguments：Anthropic 的 `input` 是 JSON **对象**，OpenAI 约定是**字符串**，转一次。
@@ -1269,5 +1390,104 @@ mod tests {
         assert_eq!(img["source"]["type"], "base64");
         assert_eq!(img["source"]["media_type"], "image/png");
         assert_eq!(img["source"]["data"], "QUJD", "data: 前缀必须剥掉");
+    }
+
+    // ── tool 结果回灌（四协议各自的原生形态，2026-10-30）──────────
+
+    /// 一段完整的工具往返：user 提问 → assistant 调工具 → tool 结果。
+    fn tool_round_trip() -> Vec<Message> {
+        let call = json!({
+            "id": "call_1", "type": "function",
+            "function": {"name": "get_weather", "arguments": "{\"city\":\"上海\"}"}
+        });
+        vec![
+            Message::user("上海天气怎么样"),
+            Message::assistant_with_tools("我来查一下", vec![call]),
+            Message::tool("call_1", "get_weather", "晴，25度"),
+        ]
+    }
+
+    #[test]
+    fn openai_tool_result_uses_tool_role_and_call_id() {
+        let b = build_body(&cfg(ProviderKind::OpenAi), &tool_round_trip(), false, &[]);
+        let ms = b["messages"].as_array().unwrap();
+        // assistant 那条必须原样带回 tool_calls（服务端按 id 配对）
+        assert_eq!(ms[1]["tool_calls"][0]["id"], "call_1");
+        let t = &ms[2];
+        assert_eq!(t["role"], "tool");
+        assert_eq!(t["tool_call_id"], "call_1");
+        assert_eq!(t["content"], "晴，25度");
+    }
+
+    #[test]
+    fn anthropic_tool_result_is_user_block_with_tool_use_id() {
+        let b = build_body(
+            &cfg(ProviderKind::Anthropic),
+            &tool_round_trip(),
+            false,
+            &[],
+        );
+        let ms = b["messages"].as_array().unwrap();
+        // assistant 的 tool_calls 要转成 content 数组里的 tool_use 块，input 是对象。
+        // content 非空时 text 块在前、tool_use 在后
+        let assistant_content = ms[1]["content"].as_array().unwrap();
+        assert_eq!(assistant_content[0]["type"], "text");
+        assert_eq!(assistant_content[1]["type"], "tool_use");
+        assert_eq!(assistant_content[1]["id"], "call_1");
+        assert_eq!(assistant_content[1]["input"]["city"], "上海");
+        // tool 结果：user 角色 + tool_result 块
+        let t = &ms[2];
+        assert_eq!(t["role"], "user");
+        assert_eq!(t["content"][0]["type"], "tool_result");
+        assert_eq!(t["content"][0]["tool_use_id"], "call_1");
+        assert_eq!(t["content"][0]["content"], "晴，25度");
+    }
+
+    #[test]
+    fn gemini_tool_result_is_function_response_by_name() {
+        let b = build_body(&cfg(ProviderKind::Gemini), &tool_round_trip(), false, &[]);
+        let cs = b["contents"].as_array().unwrap();
+        // assistant 的 tool_calls 转成 model 角色的 functionCall part；
+        // content 非空时 text part 在前
+        assert_eq!(cs[1]["role"], "model");
+        assert_eq!(cs[1]["parts"][1]["functionCall"]["name"], "get_weather");
+        assert_eq!(cs[1]["parts"][1]["functionCall"]["args"]["city"], "上海");
+        // tool 结果：user 角色 + functionResponse，按**名字**配对
+        assert_eq!(cs[2]["role"], "user");
+        assert_eq!(cs[2]["parts"][0]["functionResponse"]["name"], "get_weather");
+        assert_eq!(
+            cs[2]["parts"][0]["functionResponse"]["response"]["result"],
+            "晴，25度"
+        );
+    }
+
+    #[test]
+    fn ollama_tool_result_uses_tool_name_and_object_args() {
+        let b = build_body(&cfg(ProviderKind::Ollama), &tool_round_trip(), false, &[]);
+        let ms = b["messages"].as_array().unwrap();
+        // assistant 回显时 arguments 要转回对象（Ollama 请求方向的约定）
+        assert_eq!(
+            ms[1]["tool_calls"][0]["function"]["arguments"]["city"],
+            "上海"
+        );
+        let t = &ms[2];
+        assert_eq!(t["role"], "tool");
+        assert_eq!(t["tool_name"], "get_weather");
+        assert_eq!(t["content"], "晴，25度");
+    }
+
+    #[test]
+    fn malformed_tool_arguments_degrade_to_empty_object() {
+        // arguments 不是合法 JSON：不能发非法报文，退回空对象让模型重发
+        let call = json!({
+            "id": "call_x", "type": "function",
+            "function": {"name": "get_weather", "arguments": "{broken"}
+        });
+        let msgs = vec![
+            Message::assistant_with_tools("", vec![call]),
+            Message::tool("call_x", "get_weather", "err"),
+        ];
+        let b = build_body(&cfg(ProviderKind::Anthropic), &msgs, false, &[]);
+        assert_eq!(b["messages"][0]["content"][0]["input"], json!({}));
     }
 }

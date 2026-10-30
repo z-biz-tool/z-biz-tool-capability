@@ -1,9 +1,11 @@
 //! 消息与结果类型。
 //!
-//! 刻意保持「薄」：只有 `role` / `content` / `images`。十套实现里没有一套
-//! 用到了比这更多的东西（tool 调用是请求级参数，不是消息级），
-//! 所以消息结构不加 `name`、`tool_call_id` 这些 OpenAI 协议细节 ——
-//! 需要时由 `wire` 层在内部补，接口面保持最小。
+//! 刻意保持「薄」：核心只有 `role` / `content` / `images`。tool 相关字段
+//! （`tool_call_id` / `tool_name` / `tool_calls`）是 2026-10-30 加的，
+//! 为了让「工具结果」能按各家原生协议回灌（OpenAI 要 `role:"tool"` +
+//! `tool_call_id`，Anthropic 要 `tool_result` 块，Gemini 要 `functionResponse`）。
+//! 加之前 terminal 只能把工具结果包成 user 消息降级回灌 —— 见 terminal 的
+//! `ai_tools.rs`。字段全部默认空，不带工具的调用方完全无感。
 
 use std::time::Duration;
 
@@ -17,6 +19,10 @@ pub enum Role {
     System,
     User,
     Assistant,
+    /// 工具结果。**不是**「模型说的」也不是「用户说的」——
+    /// 各家协议里它是独立角色（OpenAI/Ollama）或特定 content 块（Anthropic/Gemini），
+    /// 编码细节在 `wire` 层。
+    Tool,
 }
 
 impl Role {
@@ -25,6 +31,7 @@ impl Role {
             Role::System => "system",
             Role::User => "user",
             Role::Assistant => "assistant",
+            Role::Tool => "tool",
         }
     }
 }
@@ -37,6 +44,19 @@ pub struct Message {
     /// base64（不带 data: 前缀）或完整 data URL。仅对支持视觉的模型有意义。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<String>,
+    /// 工具结果关联的调用 id（仅 `Role::Tool` 用）。OpenAI/Anthropic 用它配对。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// 工具名（仅 `Role::Tool` 用）。Gemini 的 `functionResponse` 与
+    /// Ollama 的 tool 消息按**名字**配对，没有 id 字段 —— 所以两个都要带。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    /// assistant 这一轮请求调用的工具（恒为 OpenAI 形状，同
+    /// [`ChatReply::tool_calls`]）。**回灌时必须原样带回去** ——
+    /// OpenAI 会校验「tool 结果前面必须有一条带对应 tool_calls 的 assistant 消息」，
+    /// 缺了直接 400。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tool_calls: Vec<serde_json::Value>,
 }
 
 /// 工具声明（协议无关形状）。
@@ -74,6 +94,9 @@ impl Message {
             role: Role::System,
             content: content.into(),
             images: Vec::new(),
+            tool_call_id: None,
+            tool_name: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -82,6 +105,9 @@ impl Message {
             role: Role::User,
             content: content.into(),
             images: Vec::new(),
+            tool_call_id: None,
+            tool_name: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -90,6 +116,46 @@ impl Message {
             role: Role::Assistant,
             content: content.into(),
             images: Vec::new(),
+            tool_call_id: None,
+            tool_name: None,
+            tool_calls: Vec::new(),
+        }
+    }
+
+    /// 一条工具结果消息。`tool_call_id` 是模型给的调用 id，`tool_name` 是工具名。
+    ///
+    /// 两个 id 都要带：OpenAI/Anthropic 按 `tool_call_id` 配对，
+    /// Gemini/Ollama 按 `tool_name` 配对 —— 只带一个会在某家协议上配不上对。
+    pub fn tool(
+        tool_call_id: impl Into<String>,
+        tool_name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+            images: Vec::new(),
+            tool_call_id: Some(tool_call_id.into()),
+            tool_name: Some(tool_name.into()),
+            tool_calls: Vec::new(),
+        }
+    }
+
+    /// 一条带工具调用的 assistant 消息（回灌历史时用）。
+    ///
+    /// `tool_calls` 必须是**原样**的 OpenAI 形状（见 [`ChatReply::tool_calls`]），
+    /// 不能改写 —— 服务端会按 id 校验后续 tool 结果。
+    pub fn assistant_with_tools(
+        content: impl Into<String>,
+        tool_calls: Vec<serde_json::Value>,
+    ) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+            images: Vec::new(),
+            tool_call_id: None,
+            tool_name: None,
+            tool_calls,
         }
     }
 
@@ -164,5 +230,45 @@ mod tests {
     fn usage_unknown_is_none_not_zero() {
         let u = Usage::default();
         assert_eq!(u.total_tokens, None);
+    }
+
+    #[test]
+    fn tool_message_carries_both_ids() {
+        let m = Message::tool("call_1", "get_weather", "晴");
+        assert_eq!(m.role, Role::Tool);
+        assert_eq!(m.tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(m.tool_name.as_deref(), Some("get_weather"));
+        assert_eq!(m.content, "晴");
+    }
+
+    #[test]
+    fn tool_fields_absent_on_plain_messages() {
+        // 不带工具的调用方完全无感：新字段不出现在线上报文里
+        let m = Message::user("hi");
+        let s = serde_json::to_string(&m).unwrap();
+        assert!(!s.contains("tool_call_id"), "{s}");
+        assert!(!s.contains("tool_name"), "{s}");
+        assert!(!s.contains("tool_calls"), "{s}");
+    }
+
+    #[test]
+    fn assistant_with_tools_keeps_calls_verbatim() {
+        let calls = vec![serde_json::json!({
+            "id": "call_1", "type": "function",
+            "function": {"name": "get_weather", "arguments": "{\"city\":\"上海\"}"}
+        })];
+        let m = Message::assistant_with_tools("我来查一下", calls.clone());
+        assert_eq!(m.role, Role::Assistant);
+        assert_eq!(m.tool_calls, calls);
+    }
+
+    #[test]
+    fn tool_result_round_trips_through_serde() {
+        let m = Message::tool("call_1", "get_weather", "晴");
+        let s = serde_json::to_string(&m).unwrap();
+        let back: Message = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.role, Role::Tool);
+        assert_eq!(back.tool_call_id.as_deref(), Some("call_1"));
+        assert_eq!(back.tool_name.as_deref(), Some("get_weather"));
     }
 }
