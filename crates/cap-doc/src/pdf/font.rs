@@ -60,8 +60,8 @@ fn owned(doc: &Document, object: &Object) -> Option<Object> {
 /// 收集一页可用的字体映射，键是页面 Resources/Font 里的名字（如 `F1`）。
 pub(crate) fn font_maps(doc: &Document, page: ObjectId) -> HashMap<Vec<u8>, FontMap> {
     let mut maps = HashMap::new();
-    let Some(resources) =
-        crate::pdf::ops::inheritable(doc, page, b"Resources").and_then(|object| owned(doc, &object))
+    let Some(resources) = crate::pdf::ops::inheritable(doc, page, b"Resources")
+        .and_then(|object| owned(doc, &object))
     else {
         return maps;
     };

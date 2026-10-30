@@ -19,7 +19,10 @@ fn supports_is_case_insensitive_and_ignores_directories() {
 
     // 无扩展名 / 不认识的扩展名 / 只有目录名 —— 都不该误判
     assert!(!cap_doc::supports("README"));
-    assert!(!cap_doc::supports("a.docx"), "docx 由 file 自己处理，不在本层");
+    assert!(
+        !cap_doc::supports("a.docx"),
+        "docx 由 file 自己处理，不在本层"
+    );
     assert!(!cap_doc::supports("/tmp/pdf/"), "目录名里的 pdf 不算扩展名");
 }
 

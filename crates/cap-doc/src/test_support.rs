@@ -28,19 +28,13 @@ impl TempDir {
                 .unwrap()
                 .as_nanos();
             let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!(
-                "cap-doc-{}-{}-{}-{}",
-                tag, pid, nonce, seq
-            ));
+            let path =
+                std::env::temp_dir().join(format!("cap-doc-{}-{}-{}-{}", tag, pid, nonce, seq));
             if std::fs::create_dir_all(&path).is_ok() {
                 return Self { path };
             }
         }
         panic!("连续 1000 次都没能建出唯一临时目录（tag={tag}）");
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 }
 
