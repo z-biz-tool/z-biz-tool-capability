@@ -55,7 +55,11 @@ pub struct ToolDef {
 }
 
 impl ToolDef {
-    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: serde_json::Value) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        parameters: serde_json::Value,
+    ) -> Self {
         Self {
             name: name.into(),
             description: description.into(),
@@ -138,10 +142,7 @@ mod tests {
 
     #[test]
     fn role_serializes_lowercase() {
-        assert_eq!(
-            serde_json::to_string(&Role::System).unwrap(),
-            "\"system\""
-        );
+        assert_eq!(serde_json::to_string(&Role::System).unwrap(), "\"system\"");
         assert_eq!(serde_json::to_string(&Role::User).unwrap(), "\"user\"");
     }
 

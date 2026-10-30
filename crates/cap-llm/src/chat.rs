@@ -100,7 +100,10 @@ async fn http_error(cfg: &LlmConfig, status: u16, resp: reqwest::Response) -> Ll
         s if (500..600).contains(&s) => "（服务端错误，稍后重试）",
         _ => "",
     };
-    LlmError::http(status, format!("{}{}", truncate_chars(&detail, ERROR_BODY_LIMIT), hint))
+    LlmError::http(
+        status,
+        format!("{}{}", truncate_chars(&detail, ERROR_BODY_LIMIT), hint),
+    )
 }
 
 /// 发一次对话（非流式）。
@@ -393,10 +396,12 @@ pub async fn list_models(cfg: &LlmConfig) -> Result<Vec<String>, LlmError> {
     if !status.is_success() {
         return Err(http_error(&probe, status.as_u16(), resp).await);
     }
-    let payload: Value = resp
-        .json()
-        .await
-        .map_err(|e| LlmError::parse(format!("模型列表不是合法 JSON：{}", truncate_chars(&e.to_string(), 120))))?;
+    let payload: Value = resp.json().await.map_err(|e| {
+        LlmError::parse(format!(
+            "模型列表不是合法 JSON：{}",
+            truncate_chars(&e.to_string(), 120)
+        ))
+    })?;
     wire::parse_models(&probe, &payload)
 }
 
@@ -476,7 +481,10 @@ mod tests {
         // 开发机上有 HTTP 代理时，这个地址会被代理拦下返回 502 ——
         // 所以 Http 也是合法结果。这里只钉「有分类、不 panic、不泄露 key」。
         assert!(
-            matches!(e.kind, ErrorKind::Network | ErrorKind::Timeout | ErrorKind::Http),
+            matches!(
+                e.kind,
+                ErrorKind::Network | ErrorKind::Timeout | ErrorKind::Http
+            ),
             "实际: {:?} {}",
             e.kind,
             e.message

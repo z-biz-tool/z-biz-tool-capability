@@ -48,7 +48,9 @@ async fn main() {
         Ok(r) => {
             println!(
                 "  ✓ {} | {}ms | tokens={:?}",
-                r.content, r.latency.as_millis(), r.usage.as_ref().and_then(|u| u.total_tokens)
+                r.content,
+                r.latency.as_millis(),
+                r.usage.as_ref().and_then(|u| u.total_tokens)
             );
             if r.content.is_empty() {
                 println!("  ✗ 正文为空");

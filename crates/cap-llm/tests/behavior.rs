@@ -70,7 +70,10 @@ fn one_message_list_produces_four_valid_protocol_bodies() {
     let anthropic = build_request_body(&cfg(ProviderKind::Anthropic), &msgs, false, &[]);
     assert_eq!(anthropic["system"], "你是助手");
     assert_eq!(anthropic["messages"].as_array().unwrap().len(), 1);
-    assert!(anthropic["max_tokens"].is_number(), "Anthropic 必须带 max_tokens");
+    assert!(
+        anthropic["max_tokens"].is_number(),
+        "Anthropic 必须带 max_tokens"
+    );
 
     let gemini = build_request_body(&cfg(ProviderKind::Gemini), &msgs, false, &[]);
     assert_eq!(gemini["systemInstruction"]["parts"][0]["text"], "你是助手");

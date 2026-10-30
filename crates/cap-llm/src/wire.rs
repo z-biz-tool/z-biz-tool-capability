@@ -70,12 +70,7 @@ fn temp_json(t: f32) -> Value {
 ///
 /// `tools` 给了就把工具声明翻译成对应协议的格式（pet 的 ai.rs 曾为
 /// claude/gemini 各写一套双向转换，现在收口在这一层）。
-pub fn build_body(
-    cfg: &LlmConfig,
-    messages: &[Message],
-    stream: bool,
-    tools: &[ToolDef],
-) -> Value {
+pub fn build_body(cfg: &LlmConfig, messages: &[Message], stream: bool, tools: &[ToolDef]) -> Value {
     match cfg.kind.protocol() {
         Protocol::OpenAiCompat => {
             // 注意不能写成 `"temperature": cfg.temperature` —— None 会变成
@@ -401,7 +396,10 @@ pub fn parse_reply(cfg: &LlmConfig, payload: &Value) -> Result<ChatReply, LlmErr
                 content,
                 tool_calls,
                 usage: payload.get("usage").map(|u| Usage {
-                    prompt_tokens: u.get("input_tokens").and_then(Value::as_u64).map(|v| v as u32),
+                    prompt_tokens: u
+                        .get("input_tokens")
+                        .and_then(Value::as_u64)
+                        .map(|v| v as u32),
                     completion_tokens: u
                         .get("output_tokens")
                         .and_then(Value::as_u64)
@@ -547,10 +545,7 @@ fn parse_openai_usage(u: &Value) -> Usage {
 /// Anthropic 的 `tool_use` 块 → OpenAI tool_call。
 /// arguments：Anthropic 的 `input` 是 JSON **对象**，OpenAI 约定是**字符串**，转一次。
 fn claude_block_to_openai_tool_call(b: &Value) -> Value {
-    let args = b
-        .get("input")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let args = b.get("input").cloned().unwrap_or_else(|| json!({}));
     let arguments = match args {
         Value::String(s) => s,
         other => other.to_string(),
@@ -606,10 +601,7 @@ fn normalize_ollama_tool_call(v: &Value) -> Value {
 ///
 /// 文本为空不代表异常（Anthropic 的 `message_start`、OpenAI 首个带 role 的
 /// delta 都是空文本），所以返回 `Option<String>` 而不是 `String`。
-pub fn parse_delta(
-    cfg: &LlmConfig,
-    payload: &Value,
-) -> (Option<String>, bool, Option<Usage>) {
+pub fn parse_delta(cfg: &LlmConfig, payload: &Value) -> (Option<String>, bool, Option<Usage>) {
     match cfg.kind.protocol() {
         Protocol::OpenAiCompat => {
             let text = payload
@@ -628,7 +620,10 @@ pub fn parse_delta(
                 .and_then(|c| c.get("finish_reason"))
                 .map(|f| !f.is_null())
                 .unwrap_or(false);
-            let usage = payload.get("usage").filter(|u| !u.is_null()).map(parse_openai_usage);
+            let usage = payload
+                .get("usage")
+                .filter(|u| !u.is_null())
+                .map(parse_openai_usage);
             (text, done, usage)
         }
         Protocol::Anthropic => {
@@ -770,7 +765,10 @@ fn shape_error(expected: &str, payload: &Value) -> LlmError {
         } else {
             truncate_chars(&keys.join(", "), 120)
         },
-        payload.as_str().map(|s| format!("，正文前 80 字：{}", truncate_chars(s, 80))).unwrap_or_default()
+        payload
+            .as_str()
+            .map(|s| format!("，正文前 80 字：{}", truncate_chars(s, 80)))
+            .unwrap_or_default()
     ))
 }
 
@@ -797,7 +795,12 @@ mod tests {
 
     #[test]
     fn openai_body_shape() {
-        let b = build_body(&cfg(ProviderKind::OpenAi), &[Message::user("hi")], false, &[]);
+        let b = build_body(
+            &cfg(ProviderKind::OpenAi),
+            &[Message::user("hi")],
+            false,
+            &[],
+        );
         assert_eq!(b["model"], "m1");
         assert_eq!(b["messages"][0]["role"], "user");
         assert_eq!(b["stream"], false);
@@ -810,7 +813,8 @@ mod tests {
         let b = build_body(
             &cfg(ProviderKind::Anthropic),
             &[Message::system("be brief"), Message::user("hi")],
-            false, &[],
+            false,
+            &[],
         );
         assert_eq!(b["system"], "be brief");
         // system 不能留在 messages 里
@@ -830,8 +834,13 @@ mod tests {
     fn anthropic_joins_multiple_system_messages() {
         let b = build_body(
             &cfg(ProviderKind::Anthropic),
-            &[Message::system("a"), Message::system("b"), Message::user("x")],
-            false, &[],
+            &[
+                Message::system("a"),
+                Message::system("b"),
+                Message::user("x"),
+            ],
+            false,
+            &[],
         );
         assert_eq!(b["system"], "a\n\nb");
     }
@@ -840,8 +849,13 @@ mod tests {
     fn gemini_renames_assistant_to_model() {
         let b = build_body(
             &cfg(ProviderKind::Gemini),
-            &[Message::user("hi"), Message::assistant("yo"), Message::user("again")],
-            false, &[],
+            &[
+                Message::user("hi"),
+                Message::assistant("yo"),
+                Message::user("again"),
+            ],
+            false,
+            &[],
         );
         let contents = b["contents"].as_array().unwrap();
         assert_eq!(contents[0]["role"], "user");
@@ -851,7 +865,12 @@ mod tests {
 
     #[test]
     fn gemini_uses_generation_config() {
-        let b = build_body(&cfg(ProviderKind::Gemini), &[Message::user("hi")], false, &[]);
+        let b = build_body(
+            &cfg(ProviderKind::Gemini),
+            &[Message::user("hi")],
+            false,
+            &[],
+        );
         assert_eq!(b["generationConfig"]["maxOutputTokens"], 100);
         assert_eq!(b["generationConfig"]["temperature"], 0.3);
         // 顶层不该出现 max_tokens
@@ -863,7 +882,12 @@ mod tests {
     #[test]
     fn ollama_maps_max_tokens_to_num_predict() {
         // 这一格搞错不会报错，只会静默按默认长度截断
-        let b = build_body(&cfg(ProviderKind::Ollama), &[Message::user("hi")], false, &[]);
+        let b = build_body(
+            &cfg(ProviderKind::Ollama),
+            &[Message::user("hi")],
+            false,
+            &[],
+        );
         assert_eq!(b["options"]["num_predict"], 100);
         assert!(b.get("max_tokens").is_none());
     }
@@ -985,7 +1009,11 @@ mod tests {
         assert!(err.message.contains("choices[0]"));
         assert!(err.message.contains("unexpected"));
         // 输出长度被限住，不是 4000 字的原文
-        assert!(err.message.chars().count() < 400, "错误串过长: {}", err.message.chars().count());
+        assert!(
+            err.message.chars().count() < 400,
+            "错误串过长: {}",
+            err.message.chars().count()
+        );
         assert!(!err.message.contains(&"机密内容".repeat(3)));
     }
 
@@ -1096,7 +1124,9 @@ mod tests {
     fn empty_model_list_is_not_an_error() {
         // 有些自建代理不支持 /models，返回 {"data":[]} —— 这是"没有"，不是"坏了"
         let p = json!({ "data": [] });
-        assert!(parse_models(&cfg(ProviderKind::OpenAi), &p).unwrap().is_empty());
+        assert!(parse_models(&cfg(ProviderKind::OpenAi), &p)
+            .unwrap()
+            .is_empty());
     }
 
     // ── 工具声明翻译（pet 的 ai.rs 下沉，2026-10-26）──────────────
@@ -1111,20 +1141,35 @@ mod tests {
 
     #[test]
     fn tools_openai_shape_is_passthrough() {
-        let b = build_body(&cfg(ProviderKind::OpenAi), &[Message::user("hi")], false, &[tool()]);
+        let b = build_body(
+            &cfg(ProviderKind::OpenAi),
+            &[Message::user("hi")],
+            false,
+            &[tool()],
+        );
         let ts = b["tools"].as_array().unwrap();
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0]["type"], "function");
         assert_eq!(ts[0]["function"]["name"], "get_weather");
         assert!(ts[0]["function"]["parameters"]["properties"].is_object());
         // 没有工具时 tools 字段不能出现（部分网关见 null/[] 报 400）
-        let b0 = build_body(&cfg(ProviderKind::OpenAi), &[Message::user("hi")], false, &[]);
+        let b0 = build_body(
+            &cfg(ProviderKind::OpenAi),
+            &[Message::user("hi")],
+            false,
+            &[],
+        );
         assert!(b0.get("tools").is_none());
     }
 
     #[test]
     fn tools_anthropic_uses_input_schema() {
-        let b = build_body(&cfg(ProviderKind::Anthropic), &[Message::user("hi")], false, &[tool()]);
+        let b = build_body(
+            &cfg(ProviderKind::Anthropic),
+            &[Message::user("hi")],
+            false,
+            &[tool()],
+        );
         let ts = b["tools"].as_array().unwrap();
         assert_eq!(ts[0]["name"], "get_weather");
         assert_eq!(ts[0]["input_schema"]["type"], "object");
@@ -1133,7 +1178,12 @@ mod tests {
 
     #[test]
     fn tools_gemini_wraps_function_declarations() {
-        let b = build_body(&cfg(ProviderKind::Gemini), &[Message::user("hi")], false, &[tool()]);
+        let b = build_body(
+            &cfg(ProviderKind::Gemini),
+            &[Message::user("hi")],
+            false,
+            &[tool()],
+        );
         let ts = b["tools"].as_array().unwrap();
         assert_eq!(ts.len(), 1);
         assert_eq!(ts[0]["functionDeclarations"][0]["name"], "get_weather");
@@ -1141,7 +1191,12 @@ mod tests {
 
     #[test]
     fn tools_ollama_is_openai_shape() {
-        let b = build_body(&cfg(ProviderKind::Ollama), &[Message::user("hi")], false, &[tool()]);
+        let b = build_body(
+            &cfg(ProviderKind::Ollama),
+            &[Message::user("hi")],
+            false,
+            &[tool()],
+        );
         assert_eq!(b["tools"][0]["type"], "function");
     }
 
@@ -1195,7 +1250,10 @@ mod tests {
             "prompt_eval_count": 5, "eval_count": 3
         });
         let r = parse_reply(&cfg(ProviderKind::Ollama), &payload).unwrap();
-        assert_eq!(r.tool_calls[0]["function"]["arguments"], r#"{"city":"广州"}"#);
+        assert_eq!(
+            r.tool_calls[0]["function"]["arguments"],
+            r#"{"city":"广州"}"#
+        );
     }
 
     // ── Anthropic 视觉（content 数组）───────────────────────────
