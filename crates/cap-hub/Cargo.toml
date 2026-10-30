@@ -1,0 +1,23 @@
+[package]
+name = "cap-hub"
+version = "0.1.0"
+edition = "2021"
+description = "z-biz-tool 家族统一深链协议：zbiz:// 的构造、解析、待处理队列与产品清单"
+license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["tauri", "deeplink", "ipc", "z-biz"]
+categories = ["api-bindings"]
+
+[features]
+# Tauri 胶水层（receiver 模块）。
+#
+# **默认关闭**：核心协议是纯函数，零 tauri 依赖 —— 这样它能被
+# node 测试、CLI 工具、非 Tauri 宿主直接复用。Tauri 应用打开这个 feature。
+default = []
+tauri = ["dep:tauri"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tauri = { version = "2", optional = true }
