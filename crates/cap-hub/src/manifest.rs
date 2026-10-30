@@ -113,7 +113,10 @@ impl ProductRegistry {
 
     /// 列出「接受深链」的产品。
     pub fn deep_link_products(&self) -> Vec<&ProductMeta> {
-        self.products.iter().filter(|p| p.accepts_deep_link).collect()
+        self.products
+            .iter()
+            .filter(|p| p.accepts_deep_link)
+            .collect()
     }
 
     /// 列出「接受深链且支持指定动作」的产品。
