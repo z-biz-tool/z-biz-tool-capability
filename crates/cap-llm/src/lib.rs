@@ -84,6 +84,7 @@
 
 #![forbid(unsafe_code)]
 
+mod asr;
 mod chat;
 mod config;
 mod error;
@@ -92,6 +93,7 @@ mod presets;
 mod sse;
 mod wire;
 
+pub use asr::{transcribe, transcribe_file, Segment, Transcript, TranscriptionRequest};
 pub use chat::{chat, chat_stream, chat_stream_if, chat_with_tools, list_models, ping};
 pub use config::{Action, LlmConfig, Protocol, ProviderKind};
 pub use error::{redact, truncate_chars, ErrorKind, LlmError};

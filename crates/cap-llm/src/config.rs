@@ -31,7 +31,7 @@
 
 use std::time::Duration;
 
-use crate::error::{truncate_chars, LlmError};
+use crate::error::{truncate_chars, ErrorKind, LlmError};
 
 /// 协议族。**同一个协议族的请求体、鉴权头、响应结构完全一致**，
 /// 差别只在默认地址 —— 这是「归并」能成立的前提。
@@ -238,6 +238,16 @@ pub enum Action {
     Chat,
     /// 列模型
     Models,
+    /// 语音转写（ASR）。
+    ///
+    /// **只有 OpenAI 兼容系有 `/audio/transcriptions`**。Anthropic / Gemini /
+    /// Ollama 都没有这个端点 —— [`Self::endpoint`] 会返回 `ErrorKind::Unsupported`
+    /// 并写清原因，而不是拼一个必然 404 的地址发出去。
+    ///
+    /// 为什么归到这一层：会议纪要（cap-meeting）要转写音频，而「multipart 上传 +
+    /// 状态码映射 + 密钥脱敏」是传输细节，与 chat 同源；归进来后 note / mind /
+    /// 将来的会议纪要壳都不必各自再写一遍上传逻辑。
+    Transcription,
 }
 
 impl LlmConfig {
@@ -302,6 +312,7 @@ impl LlmConfig {
         //    `…/chat/completions/v1/chat/completions`
         for tail in [
             "/chat/completions",
+            "/audio/transcriptions",
             "/messages",
             "/api/chat",
             "/completions",
@@ -333,6 +344,7 @@ impl LlmConfig {
                 Ok(match action {
                     Action::Chat => format!("{root}/chat/completions"),
                     Action::Models => format!("{root}/models"),
+                    Action::Transcription => format!("{root}/audio/transcriptions"),
                 })
             }
             Protocol::Anthropic => {
@@ -342,6 +354,8 @@ impl LlmConfig {
                     // Anthropic 的 /models 自 2025 起可用；不可用时调用方会拿到
                     // 404，本层不为此单独做降级分支（避免隐藏真实的鉴权问题）
                     Action::Models => format!("{root}/models"),
+                    // Claude 系列没有音频转写端点，不猜一个发出去。
+                    Action::Transcription => return Err(unsupported_asr(self.kind)),
                 })
             }
             Protocol::Gemini => {
@@ -351,11 +365,16 @@ impl LlmConfig {
                         format!("{root}/models/{}:generateContent", encode_path(&self.model))
                     }
                     Action::Models => format!("{root}/models"),
+                    // Gemini 的音频理解走 generateContent 的 inline_data，不是
+                    // OpenAI 那套 multipart 转写接口；这里不做第二套报文构造。
+                    Action::Transcription => return Err(unsupported_asr(self.kind)),
                 })
             }
             Protocol::Ollama => Ok(match action {
                 Action::Chat => format!("{base}/api/chat"),
                 Action::Models => format!("{base}/api/tags"),
+                // Ollama 本地推理没有 /audio/transcriptions。
+                Action::Transcription => return Err(unsupported_asr(self.kind)),
             }),
         }
     }
@@ -375,6 +394,28 @@ impl LlmConfig {
 
 fn strip_trailing_slash(s: &str) -> String {
     s.trim_end_matches('/').to_string()
+}
+
+/// 该 provider 没有 `/audio/transcriptions` 端点时的统一报错。
+///
+/// **不静默回落**是本 crate 的第一条纪律（见 lib.rs）：拼一个 OpenAI 的地址
+/// 发给 Anthropic 只会拿到一个看不懂的 404，用户无从判断是地址错、key 错
+/// 还是根本没这个能力。这里直接说清「哪家没有、该换哪家」。
+///
+/// 为什么只支持 OpenAI 兼容系：目前业界可用的自托管 / 聚合网关 ASR 端点
+/// 几乎都是 OpenAI 形状（`multipart` + `model` 字段 + `text` 响应）。
+/// Gemini 的音频理解是 generateContent 里塞 inline_data，报文构造完全不同；
+/// 为了「看起来三家都支持」去拼第二套报文，反而会把错误藏在半路。
+fn unsupported_asr(kind: ProviderKind) -> LlmError {
+    LlmError::new(
+        ErrorKind::Unsupported,
+        format!(
+            "{} 不提供 /audio/transcriptions 语音转写端点。目前仅 OpenAI 兼容系 \
+             （OpenAI / SiliconFlow / one-api / vLLM 等）支持音频转写，请改用这些 \
+             provider；或直接传入 OpenAI 兼容的 Base URL。",
+            kind.label()
+        ),
+    )
 }
 
 /// 补版本段。已经以该段结尾就原样返回；否则补上。

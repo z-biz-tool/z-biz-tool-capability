@@ -46,6 +46,19 @@ fn shared_client() -> &'static reqwest::Client {
     })
 }
 
+/// 供 [`crate::asr`] 复用同一个连接池。
+///
+/// ASR 与 chat 是同一类请求（同源、同鉴权、同超时语义），各建一个
+/// client 会丢掉 TLS 会话复用 —— 上传音频时多付一次握手是实打实的秒级开销。
+pub(crate) fn client() -> &'static reqwest::Client {
+    shared_client()
+}
+
+/// 供 [`crate::asr`] 复用传输层错误映射。
+pub(crate) fn transport_error(cfg: &LlmConfig, e: reqwest::Error) -> LlmError {
+    map_transport(cfg, e)
+}
+
 /// 把「错误分类 + 原始错误串」变成用户可读、且不含密钥的消息。
 ///
 /// 抽成纯函数是为了能**脱网测试**：`reqwest::Error` 没法手工构造，而
@@ -76,9 +89,18 @@ fn map_transport(cfg: &LlmConfig, e: reqwest::Error) -> LlmError {
 }
 
 /// 读取非 2xx 的响应体，脱敏 + 截断后拼成可读错误。
-async fn http_error(cfg: &LlmConfig, status: u16, resp: reqwest::Response) -> LlmError {
+pub(crate) async fn http_error(cfg: &LlmConfig, status: u16, resp: reqwest::Response) -> LlmError {
     let body = resp.text().await.unwrap_or_default();
-    let safe = redact(&body, &cfg.api_key);
+    http_error_from_body(cfg, status, &body)
+}
+
+/// 同 [`http_error`]，但 body 已经被上层读走了。
+///
+/// ASR 的 verbose_json 回落路径要先读 400 的 body 判断是否为格式问题，
+/// 判完才决定报错 —— 那时 body 不在 `reqwest::Response` 手里了，
+/// 只能按已读出的字符串构造。
+pub(crate) fn http_error_from_body(cfg: &LlmConfig, status: u16, body: &str) -> LlmError {
+    let safe = redact(body, &cfg.api_key);
     // 尽量从 JSON 里取 error.message，取不到再用原文
     let detail = serde_json::from_str::<Value>(&safe)
         .ok()
@@ -97,6 +119,7 @@ async fn http_error(cfg: &LlmConfig, status: u16, resp: reqwest::Response) -> Ll
         401 | 403 => "（API Key 无效或无权限）",
         404 => "（接口地址或模型名不存在，请检查 Base URL 是否多写/少写 /v1）",
         429 => "（触发限流，请稍后重试）",
+        413 => "（音频文件过大，请压缩或裁剪后重试）",
         s if (500..600).contains(&s) => "（服务端错误，稍后重试）",
         _ => "",
     };

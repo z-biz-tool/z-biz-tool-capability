@@ -1,0 +1,23 @@
+[package]
+name = "cap-meeting"
+version = "0.1.0"
+edition = "2021"
+description = "会议纪要能力层：转写文本 → 结构化纪要（议题/决议/待办/风险）+ Markdown 渲染，无状态"
+license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["meeting", "minutes", "transcript", "summarize", "llm"]
+categories = ["text-processing", "api-bindings"]
+
+# 边界说明（与 cap-llm 的分工）：
+#   cap-llm  —— 传输：multipart、鉴权、SSE、脱敏、错误分类。**不写提示词**。
+#   cap-meeting —— 业务语义：会议元信息、纪要结构、提示词模板、Markdown 渲染。
+# 为什么提示词不放 cap-llm：「把散乱口语文本整理成决议」是产品差异而非基础设施，
+# 否则所有调用 cap-llm 的人都被强制接受同一套纪要口径。
+[dependencies]
+cap-llm = { path = "../cap-llm" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

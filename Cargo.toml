@@ -27,6 +27,10 @@ reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "stream",
     "rustls-tls",
+    # ASR（Action::Transcription）要传音频文件，走 multipart/form-data。
+    # 显式开：本 workspace 一律 default-features = false，不开就是编译期错误，
+    # 而不是运行时 422 —— 这里宁可编译期挡下。
+    "multipart",
 ] }
 futures-util = "0.3"
 tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
