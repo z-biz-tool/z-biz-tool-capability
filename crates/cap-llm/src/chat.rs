@@ -395,7 +395,7 @@ pub async fn list_models(cfg: &LlmConfig) -> Result<Vec<String>, LlmError> {
     if probe.model.trim().is_empty() {
         probe.model = "probe".into();
     }
-    if probe.kind.requires_api_key() && probe.api_key.trim().is_empty() {
+    if probe.needs_api_key() && probe.api_key.trim().is_empty() {
         return Err(LlmError::not_configured(format!(
             "{} 需要 API Key 才能列出模型",
             probe.kind.label()

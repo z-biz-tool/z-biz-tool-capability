@@ -282,13 +282,50 @@ impl LlmConfig {
         crate::presets::find(id).map(|p| p.base_url)
     }
 
+    /// 这份配置是否**必须**带 ApiKey。
+    ///
+    /// 判定顺序：**预设说了算；没有预设（或预设 id 查不到）才退回
+    /// [`ProviderKind::requires_api_key`] 的默认规则**。
+    ///
+    /// 为什么不能只看 `kind`：`Custom` 同时覆盖两类服务 ——
+    /// 「云厂商的 OpenAI 兼容端点」（必须有 key）和「本机自建服务」
+    /// （回环流量，服务端根本不校验 key）。仅凭 `kind` 无法区分，
+    /// 而 `ProviderPreset::requires_api_key` 是唯一知道答案的地方。
+    ///
+    /// 2026-10-31 修：此前只按 `kind` 判，于是预设表上明明写着「免 Key」，
+    /// 运行时却弹「请先到设置里填写 API Key」—— 用户对着自己刚选的
+    /// 「本地网关」预设，被要求编一个假密钥才能用。预设的字段不能只是装饰。
+    pub fn needs_api_key(&self) -> bool {
+        if let Some(id) = self.preset {
+            if let Some(p) = crate::presets::find(id) {
+                return p.requires_api_key;
+            }
+        }
+        if !self.kind.requires_api_key() {
+            return false;
+        }
+        // 第二道判据：**地址落在本机或局域网 → 视为无鉴权**。
+        //
+        // 预设表覆盖不到「用户直接粘了一个地址」的场景：把 mini 的
+        // `http://192.168.31.249:8200/v1` 填进来时，按 URL 认预设必然认不出来，
+        // 于是退回 `Custom`（恒要 key），用户又得编假密钥。可这类地址上的
+        // llama.cpp / Ollama / LM Studio / vLLM 本来就没有鉴权层。
+        //
+        // 判决仍在服务端：真需要 key 的内网代理会回 401，比本地拦住更准确。
+        match self.resolved_base() {
+            Ok(base) => !is_private_endpoint(&base),
+            // 地址都没有 —— 交给 resolved_base 在 validate 里报「要填地址」
+            Err(_) => true,
+        }
+    }
+
     /// 校验配置是否足以发请求。**在发请求之前调用**，这样「没配 key」
     /// 得到的是一句人话，而不是一个 401。
     pub fn validate(&self) -> Result<(), LlmError> {
         if self.model.trim().is_empty() {
             return Err(LlmError::not_configured("未填写模型名（model 为空）"));
         }
-        if self.kind.requires_api_key() && self.api_key.trim().is_empty() {
+        if self.needs_api_key() && self.api_key.trim().is_empty() {
             return Err(LlmError::not_configured(format!(
                 "{} 需要 API Key，请先到「设置 → AI」填写",
                 self.kind.label()
@@ -394,6 +431,70 @@ impl LlmConfig {
 
 fn strip_trailing_slash(s: &str) -> String {
     s.trim_end_matches('/').to_string()
+}
+
+/// 该地址是否指向「本机 / 局域网」。
+///
+/// 用于判断「这份配置有没有可能是个不需要鉴权的自建服务」。只看 host，
+/// **不看端口**：llama.cpp 8200、Ollama 11434、LM Studio 1234、vLLM 8000，
+/// 按端口列举必然过时，而 host 属于私有段的判断依据是 IPv4/IPv6 保留地址
+/// （RFC 1918 / RFC 4193），不会随时间失效。
+///
+/// 认得三类：
+/// - 回环：`localhost` / `127.0.0.0/8` / `::1` / `0.0.0.0`
+/// - 私有段：`10/8`、`172.16/12`、`192.168/16`
+/// - 本地域名：`.local`（mDNS）、`.lan`、`.internal`、`host.docker.internal`
+///
+/// 不判「云厂商域名」—— 那由预设表负责，两套规则各管一段，不重叠。
+pub fn is_private_endpoint(url: &str) -> bool {
+    let host = host_of(url);
+    if host.is_empty() {
+        return false;
+    }
+    let h = host.trim_matches(|c| c == '[' || c == ']').to_ascii_lowercase();
+    // 名称类：mDNS / 局域网后缀 / 容器回流名。这些后缀不可能属于公网服务，
+    // 但它们解析不成 IP，必须显式列出，否则 `.local` 的 mini 会被当成公网。
+    if h == "localhost" || h == "host.docker.internal" || h.ends_with(".local") || h.ends_with(".lan")
+        || h.ends_with(".internal")
+    {
+        return true;
+    }
+    match h.parse::<std::net::IpAddr>() {
+        // `is_private` / `is_link_local` 是 Ipv4Addr 的方法，IpAddr 上没有，
+        // 按版本分派；IPv6 那边对应「唯一本地地址」fc00::/7。
+        Ok(std::net::IpAddr::V4(v4)) => {
+            v4.is_loopback() || v4.is_private() || v4.is_link_local() || v4.is_unspecified()
+        }
+        Ok(std::net::IpAddr::V6(v6)) => v6.is_loopback() || (v6.segments()[0] & 0xfe00) == 0xfc00,
+        // 解析不出来的是域名 —— 不可能是回环/私网
+        Err(_) => false,
+    }
+}
+
+/// 从 URL 里取 host（去掉 scheme、userinfo、端口、路径）。
+///
+/// 不引 `url` crate：本 crate 只解析 baseUrl 这一种输入，且历史配置里存在
+/// `192.168.1.2:8200/v1`（无 scheme）这种写法，引一个严格解析器反而要
+/// 额外容错。取不到就返回空串，由调用方当作「不是私有地址」处理。
+fn host_of(url: &str) -> &str {
+    let rest = match url.find("://") {
+        Some(i) => &url[i + 3..],
+        None => url,
+    };
+    let rest = rest.split('/').next().unwrap_or("");
+    // userinfo@host
+    let rest = match rest.rfind('@') {
+        Some(i) => &rest[i + 1..],
+        None => rest,
+    };
+    // IPv6 字面量 [::1]:8200
+    if rest.starts_with('[') {
+        return match rest.find(']') {
+            Some(i) => &rest[..=i],
+            None => rest,
+        };
+    }
+    rest.split(':').next().unwrap_or("")
 }
 
 /// 该 provider 没有 `/audio/transcriptions` 端点时的统一报错。
@@ -708,6 +809,98 @@ mod tests {
         let mut c = cfg(ProviderKind::Ollama, "");
         c.api_key.clear();
         assert!(c.validate().is_ok());
+    }
+
+    #[test]
+    fn preset_decides_whether_a_key_is_required() {
+        // 这条钉住 2026-10-31 的修复：预设写了「免 Key」，运行时就必须真免 Key。
+        // 反面教材是只按 kind 判 —— Custom 既是云厂商也是本机自建，
+        // 一刀切会让本地网关用不了。
+        let mut local = cfg(ProviderKind::Custom, "http://127.0.0.1:8200/v1");
+        local.preset = Some("zbiz-local");
+        local.api_key.clear();
+        assert!(!local.needs_api_key(), "zbiz-local 不该要 key");
+        assert!(local.validate().is_ok(), "免 Key 预设应当通过校验：{:?}", local.validate());
+
+        // 同一份 kind，换成需要 key 的云厂商预设 → 必须拦住
+        let mut cloud = cfg(ProviderKind::Custom, "https://api.deepseek.com/v1");
+        cloud.preset = Some("deepseek");
+        cloud.api_key.clear();
+        assert!(cloud.needs_api_key(), "deepseek 必须要求 key");
+        assert!(cloud.validate().is_err());
+
+        // 没有预设 → 退回 kind 的默认规则（Custom 要 key）
+        let mut bare = cfg(ProviderKind::Custom, "https://example.com/v1");
+        bare.api_key.clear();
+        assert!(bare.needs_api_key());
+        assert!(bare.validate().is_err());
+
+        // 预设 id 拼错 → 查不到就退回默认规则，不能因为「查不到」而放行
+        let mut typo = cfg(ProviderKind::Custom, "https://example.com/v1");
+        typo.preset = Some("zbiz-locl");
+        typo.api_key.clear();
+        assert!(typo.needs_api_key(), "预设 id 查不到时必须保守地要求 key");
+    }
+
+    #[test]
+    fn preset_wins_over_kind_for_key_requirement() {
+        // 一个 Custom 预设免 key、一个 Ollama（kind 本身免 key）要 key 的反向
+        // 情况不存在（目录里没有 requires_api_key:true 的 Ollama），
+        // 所以这里验的是「预设优先于 kind」这一条方向：
+        // zbiz-local 的 kind 是 Custom（默认要 key），但预设说不。
+        let mut c = cfg(ProviderKind::Custom, "http://127.0.0.1:8200/v1");
+        c.preset = Some("zbiz-local");
+        assert!(ProviderKind::Custom.requires_api_key(), "前提：Custom 默认要 key");
+        assert!(!c.needs_api_key(), "预设必须覆盖 kind 的默认判断");
+    }
+
+    #[test]
+    fn private_endpoint_is_recognised_without_preset() {
+        // 2026-10-31 补：用户不选预设、直接把 mini 的地址粘进来时，
+        // 按 URL 认不出预设 → 退回 Custom（要 key）→ 又得编假密钥。
+        // 私有地址本身就该免 key，与「选没选预设」无关。
+        let mut pasted = cfg(ProviderKind::Custom, "http://192.168.31.249:8200/v1");
+        pasted.api_key.clear();
+        assert!(!pasted.needs_api_key(), "局域网地址不该要 key");
+        assert!(pasted.validate().is_ok(), "{:?}", pasted.validate());
+
+        // 回环、无 scheme 的历史写法、mDNS 主机名
+        for url in [
+            "http://127.0.0.1:8200/v1",
+            "http://localhost:11434/v1",
+            "192.168.1.2:8200/v1",
+            "http://zifangs-mac-mini.local:8200/v1",
+            "http://host.docker.internal:1234/v1",
+            "http://10.0.0.9/v1",
+            "http://172.20.1.4/v1",
+            "http://[::1]:8200/v1",
+            "http://user:pw@127.0.0.1:8200/v1",
+        ] {
+            assert!(is_private_endpoint(url), "{url} 应判为私有地址");
+        }
+
+        // 公网地址一个都不能误判 —— 放行公网等于把「没填 key」的错误
+        // 从设置页挪到了 401 响应里
+        for url in [
+            "https://api.openai.com/v1",
+            "https://api.deepseek.com/v1",
+            "http://172.32.0.1/v1",
+            "http://192.169.1.1/v1",
+            "http://11.0.0.1/v1",
+            "https://example.local.evil.com/v1",
+        ] {
+            assert!(!is_private_endpoint(url), "{url} 不该判为私有地址");
+        }
+    }
+
+    #[test]
+    fn private_endpoint_does_not_rescue_key_requiring_preset() {
+        // 反向约束：预设明说要 key（云厂商），即便地址被改成本机代理，
+        // 也按预设走 —— 用户显式选的厂商优先于地址猜测。
+        let mut cloud = cfg(ProviderKind::Custom, "http://127.0.0.1:8200/v1");
+        cloud.preset = Some("deepseek");
+        cloud.api_key.clear();
+        assert!(cloud.needs_api_key());
     }
 
     #[test]

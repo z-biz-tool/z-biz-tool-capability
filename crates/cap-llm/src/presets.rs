@@ -310,6 +310,44 @@ pub static PRESETS: &[ProviderPreset] = &[
         requires_api_key: false,
         kind: ProviderKind::Ollama,
     },
+    // ── zBiz 本地网关 ──────────────────────────────────────────
+    //
+    // 家族自建的本地推理网关（`~/zbiz-ops/zbiz_ai_api.py`），把一台机器上的
+    // 文本 / 语音 / 图像 / 视频能力收敛成 **OpenAI 兼容** 的单一入口。
+    //
+    // 一条预设解决三件事：
+    //   1. 地址不用抄 —— 默认跑在网关所在机器的 `127.0.0.1:8200`；
+    //      换成局域网另一台机器（如 mini）时，用户在 UI 里改地址即可，
+    //      不需要 `http://` 手打、不需要知道 `/v1` 加在哪。
+    //   2. 不需要密钥 —— 本机回环流量，网关本身不校验 Authorization。
+    //      填任意占位串也能通，但别让界面逼用户编一个假 Key。
+    //   3. 模型名不预设 —— 与目录的硬规矩一致：网关的 `/v1/models`
+    //      会返回当前真实加载的模型，运行时现取。
+    //
+    // 为什么 `kind` 是 `Custom` 而不是新开一个变体：网关对外就是
+    // OpenAI 兼容协议，报文、鉴权、SSE 分帧与 OpenAI 完全一致，
+    // 差别只在地址和「不需要 Key」。新开变体会让 note / terminal / mind
+    // 各自维护的 `match` 全部要改，而协议上毫无差别。
+    ProviderPreset {
+        id: "zbiz-local",
+        label: "zBiz 本地网关（自建）",
+        protocol: Protocol::OpenAiCompat,
+        base_url: "http://127.0.0.1:8200/v1",
+        aliases: &[
+            "zbiz",
+            "zbiz-local",
+            "zbiz-local-gateway",
+            "智工栈",
+            "本地网关",
+            "自建网关",
+            "mini",
+            "mac-mini",
+        ],
+        category: Category::SelfHosted,
+        verified_on: "2026-10-31",
+        requires_api_key: false,
+        kind: ProviderKind::Custom,
+    },
 ];
 
 /// 按 id 找预设。id 大小写不敏感。
@@ -443,12 +481,56 @@ mod tests {
     }
 
     #[test]
-    fn preset_without_api_key_is_only_ollama() {
+    fn keyless_presets_are_loopback_only() {
+        // 免 Key 只可能是「跑在自己机器上的服务」—— 云厂商给免费额度也仍要
+        // Key，不能因为「免费」就把 requires_api_key 设成 false（那会让用户
+        // 以为不填就能用，实际拿到 401）。
+        //
+        // 2026-10-31 加入 zbiz-local 后，这条从「只有 ollama」放宽为白名单 +
+        // 分类双重约束：必须同时满足「在白名单里」和「属于自建分类」。
+        // 光有白名单会漏掉「有人把云厂商错误地标成自建」这种情况。
+        const KEYLESS_WHITELIST: &[&str] = &["ollama", "zbiz-local"];
         for p in PRESETS {
             if !p.requires_api_key {
-                assert_eq!(p.id, "ollama", "{} 不该免 key", p.id);
+                assert!(
+                    KEYLESS_WHITELIST.contains(&p.id),
+                    "{} 不该免 key —— 免 key 只允许本机/自建服务，新增请先论证",
+                    p.id
+                );
+                assert_eq!(
+                    p.category,
+                    Category::SelfHosted,
+                    "{} 免 key 却不在「自建 / 本地」分类下",
+                    p.id
+                );
             }
         }
+    }
+
+    #[test]
+    fn zbiz_local_points_at_loopback_and_needs_no_key() {
+        // 这条预设的存在理由：让用户在任何一个 zBiz 产品里选「本地网关」就
+        // 直接能用自建推理服务，不用手打 URL、不用编一个假 API Key。
+        let p = find("zbiz-local").expect("缺 zbiz-local 预设");
+        assert_eq!(p.protocol, Protocol::OpenAiCompat);
+        assert_eq!(p.kind, ProviderKind::Custom);
+        assert!(!p.requires_api_key, "本机回环流量不该要求密钥");
+        assert!(
+            p.base_url.starts_with("http://127.0.0.1:") || p.base_url.starts_with("http://localhost:"),
+            "默认地址必须是回环地址 —— 写死某台机器的局域网 IP，别人装上就连不上：{}",
+            p.base_url
+        );
+        // 端点拼接必须干净（这条预设也走通用的 endpoint() 归一逻辑）
+        let ep = p.to_config("", "test-model").endpoint(Action::Chat).unwrap();
+        assert_eq!(ep, "http://127.0.0.1:8200/v1/chat/completions");
+    }
+
+    #[test]
+    fn zbiz_local_is_discoverable_by_chinese_aliases() {
+        // 中文界面里用户会搜「本地网关」「智工栈」，别名表要能命中。
+        assert_eq!(find_by_name("本地网关").unwrap().id, "zbiz-local");
+        assert_eq!(find_by_name("智工栈").unwrap().id, "zbiz-local");
+        assert_eq!(find_by_name("zbiz").unwrap().id, "zbiz-local");
     }
 
     #[test]

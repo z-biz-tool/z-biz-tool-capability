@@ -37,7 +37,12 @@ async fn main() {
         timeout: Duration::from_secs(60),
         temperature: Some(0.2),
         max_tokens: Some(64),
-        preset: None,
+        // CAP_LLM_PRESET 让本脚本能验「免 Key 预设」这类路径：
+        // 不设时保持 None（按 kind 的默认规则判），设了就用预设的规则。
+        preset: std::env::var("CAP_LLM_PRESET")
+            .ok()
+            .and_then(|id| cap_llm::preset::find(&id))
+            .map(|p| p.id),
     };
 
     let mut failed = false;

@@ -95,7 +95,7 @@ mod wire;
 
 pub use asr::{transcribe, transcribe_file, Segment, Transcript, TranscriptionRequest};
 pub use chat::{chat, chat_stream, chat_stream_if, chat_with_tools, list_models, ping};
-pub use config::{Action, LlmConfig, Protocol, ProviderKind};
+pub use config::{is_private_endpoint, Action, LlmConfig, Protocol, ProviderKind};
 pub use error::{redact, truncate_chars, ErrorKind, LlmError};
 pub use message::{ChatReply, Delta, Message, Role, ToolDef, Usage};
 
