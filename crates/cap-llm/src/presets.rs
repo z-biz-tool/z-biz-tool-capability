@@ -516,12 +516,16 @@ mod tests {
         assert_eq!(p.kind, ProviderKind::Custom);
         assert!(!p.requires_api_key, "本机回环流量不该要求密钥");
         assert!(
-            p.base_url.starts_with("http://127.0.0.1:") || p.base_url.starts_with("http://localhost:"),
+            p.base_url.starts_with("http://127.0.0.1:")
+                || p.base_url.starts_with("http://localhost:"),
             "默认地址必须是回环地址 —— 写死某台机器的局域网 IP，别人装上就连不上：{}",
             p.base_url
         );
         // 端点拼接必须干净（这条预设也走通用的 endpoint() 归一逻辑）
-        let ep = p.to_config("", "test-model").endpoint(Action::Chat).unwrap();
+        let ep = p
+            .to_config("", "test-model")
+            .endpoint(Action::Chat)
+            .unwrap();
         assert_eq!(ep, "http://127.0.0.1:8200/v1/chat/completions");
     }
 

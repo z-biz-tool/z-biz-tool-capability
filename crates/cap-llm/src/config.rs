@@ -451,10 +451,15 @@ pub fn is_private_endpoint(url: &str) -> bool {
     if host.is_empty() {
         return false;
     }
-    let h = host.trim_matches(|c| c == '[' || c == ']').to_ascii_lowercase();
+    let h = host
+        .trim_matches(|c| c == '[' || c == ']')
+        .to_ascii_lowercase();
     // 名称类：mDNS / 局域网后缀 / 容器回流名。这些后缀不可能属于公网服务，
     // 但它们解析不成 IP，必须显式列出，否则 `.local` 的 mini 会被当成公网。
-    if h == "localhost" || h == "host.docker.internal" || h.ends_with(".local") || h.ends_with(".lan")
+    if h == "localhost"
+        || h == "host.docker.internal"
+        || h.ends_with(".local")
+        || h.ends_with(".lan")
         || h.ends_with(".internal")
     {
         return true;
@@ -820,7 +825,11 @@ mod tests {
         local.preset = Some("zbiz-local");
         local.api_key.clear();
         assert!(!local.needs_api_key(), "zbiz-local 不该要 key");
-        assert!(local.validate().is_ok(), "免 Key 预设应当通过校验：{:?}", local.validate());
+        assert!(
+            local.validate().is_ok(),
+            "免 Key 预设应当通过校验：{:?}",
+            local.validate()
+        );
 
         // 同一份 kind，换成需要 key 的云厂商预设 → 必须拦住
         let mut cloud = cfg(ProviderKind::Custom, "https://api.deepseek.com/v1");
@@ -850,7 +859,10 @@ mod tests {
         // zbiz-local 的 kind 是 Custom（默认要 key），但预设说不。
         let mut c = cfg(ProviderKind::Custom, "http://127.0.0.1:8200/v1");
         c.preset = Some("zbiz-local");
-        assert!(ProviderKind::Custom.requires_api_key(), "前提：Custom 默认要 key");
+        assert!(
+            ProviderKind::Custom.requires_api_key(),
+            "前提：Custom 默认要 key"
+        );
         assert!(!c.needs_api_key(), "预设必须覆盖 kind 的默认判断");
     }
 
