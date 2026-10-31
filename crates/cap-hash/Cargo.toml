@@ -1,0 +1,16 @@
+[package]
+name = "cap-hash"
+# 0.1.0（**尚未发布**，crates.io 上还没有这个名字）：
+#   首次发布即可占住名字，版本号不可覆盖、不可删除 —— 发错了只能 bump。
+version = "0.1.0"
+edition = "2021"
+description = "哈希原语：FNV-1a 32 位与 CRC-32/IEEE（字节进→数值出，无状态、零依赖）"
+license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["hash", "fnv", "crc32", "checksum"]
+categories = ["algorithms", "encoding"]
+
+# 刻意零依赖：哈希是纯字节计算，零依赖换来「每条能力都能被单测覆盖」——
+# 与 cap-audio / cap-video 同一个理由。
+[dependencies]

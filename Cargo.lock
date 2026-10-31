@@ -581,6 +581,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-hash"
+version = "0.1.0"
+
+[[package]]
 name = "cap-hub"
 version = "0.1.0"
 dependencies = [
