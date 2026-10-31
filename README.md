@@ -17,15 +17,24 @@ crates/
 │                 + ffmpeg 可用性检测与抽帧
 ├── cap-doc/      文档：PDF 列页 / 文本抽取 / 元数据 / 合并 / 拆分 / 压缩 / 水印
 │                 / 内嵌图提取 + EPUB / MOBI 章节解析与封面（6,448 行，2026-10-26 从 file 搬迁）
-└── cap-llm/      AI 接入：OpenAI 兼容 / Anthropic / Gemini / Ollama 四协议归一，
-                  chat / 流式 / 模型列表 / 连通性探测（2026-10-26 归并十套实现）
-                  + 供应商预设目录（17 条，2026-10-28，借鉴 cc-switch）
+├── cap-hash/     哈希：FNV-1a 32 / CRC-32-IEEE（字节进→数值出，零依赖）
+│                 + 流式 CRC-32（大文件恒定内存）。准入证据见 crates/cap-hash/EVIDENCE.md
+├── cap-hub/      家族握手：zbiz:// 深链的构造 / 解析 / 待处理队列 / 产品清单
+├── cap-llm/      AI 接入：OpenAI 兼容 / Anthropic / Gemini / Ollama 四协议归一，
+│                 chat / 流式 / 模型列表 / 连通性探测（2026-10-26 归并十套实现）
+│                 + 供应商预设目录（17 条，2026-10-28，借鉴 cc-switch）
+├── cap-meeting/  会议纪要：结构化纪要（议题 / 决策 / 行动项）的解析与 Markdown 化
+└── cap-sso/      单点登录：本地回调服务 / 密钥保管 / 外部浏览器打开
 ```
 
 ### 两类 crate，两种约束
 
 前四个是**离线原语**：路径进 → 结构出（或路径出）的纯函数，不持状态、不联网，
 出错返回 `Result<_, String>`，错误串里带上实际读到的值。
+
+`cap-hash` 是同一类（字节进 → 数值出），零依赖；
+`cap-hub` 是家族协议（深链字节级编解码），核心模块刻意不 import tauri，
+好让同一份实现能被单测直接覆盖、也能被任何形态的宿主复用。
 
 `cap-llm` 是**联网原语**，约束不同，见下节。这个区别必须看清楚：
 能力层里放联网的东西有代价（多一个 reqwest、多一类失败模式），
@@ -195,6 +204,11 @@ cargo add cap-video    # 0.1.0（2026-10-20 首发）
 
 > 三个 crate 均已上架 crates.io。版本号**不可覆盖、不可删除**（只能 yank 撤下，
 > 但版本号永久占用）⇒ 发错了只能 bump 新版本。
+>
+> ⚠️ **尚未上架的 crate**（2026-10-31 实测 crates.io）：`cap-doc` / `cap-llm` /
+> `cap-hub` / `cap-meeting` / `cap-sso` / `cap-hash` —— 名字仍敞着，版本号没人占。
+> 这些仓目前用 **path 依赖**引用本地实现（`path = "../../z-biz-tool-capability/crates/..."`），
+> 仓内可编译，但没有发布版本可供外部 `cargo add`。
 
 各 app 的 `src-tauri/Cargo.toml`：
 
