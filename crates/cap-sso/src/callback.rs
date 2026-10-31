@@ -481,15 +481,43 @@ mod tests {
         // 绝大多数 OIDC 服务端要求 redirect_uri 与预登记值精确匹配，
         // 而动态端口每次都不同 ⇒ 需要能显式指定端口。
         //
-        // 先找一个当前空闲的端口（绑 0 拿到端口号，立刻放掉），
-        // 再用 start_on_port 绑它 —— 这是固定端口路径的基本保证。
-        let probe = CallbackServer::start("/callback", Duration::from_secs(1)).expect("probe");
-        let want = probe.port();
-        probe.close();
+        // **竞态说明**：测试并行跑，probe（绑 0）放掉端口后，那个临时端口
+        // 可能立刻被**并行测试自己的动态端口服务器**抢走（Linux 临时端口
+        // 分配偏好刚释放的端口）⇒ CI 上曾稳定 AddrInUse。
+        // 所以 bind 报 AddrInUse 就换一个端口重试。
+        //
+        // 断言仍是**强断言**：bind 成功 ⇒ 绑上的必然是刚 probe 的那个
+        // `want`（start_on_port 只会绑调用方给的端口；持有期间端口不可能
+        // 被换掉）—— 弱化成「只验 port>0」是不必要的让步。
+        fn bind_fixed_port_once() -> Result<(CallbackServer, u16), std::io::Error> {
+            let probe =
+                CallbackServer::start("/callback", Duration::from_millis(1)).expect("probe");
+            let want = probe.port();
+            probe.close();
+            let server = CallbackServer::start_on_port("/callback", Duration::from_secs(5), want)?;
+            Ok((server, want))
+        }
 
-        let server = CallbackServer::start_on_port("/callback", Duration::from_secs(5), want)
-            .expect("固定端口应能绑上");
-        assert_eq!(server.port(), want, "应该绑到指定的端口");
+        let mut result = None;
+        let mut last_err: Option<std::io::Error> = None;
+        for _ in 0..32 {
+            match bind_fixed_port_once() {
+                Ok(pair) => {
+                    result = Some(pair);
+                    break;
+                }
+                // 端口被并行测试抢走 ⇒ 换一个再试，不算失败。
+                // AddrInUse 是「端口被占」的唯一错误形态。
+                Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                    last_err = Some(e);
+                    continue;
+                }
+                Err(e) => panic!("固定端口绑不上（非占用错误）：{:?}", e),
+            }
+        }
+        let (server, want) = result
+            .unwrap_or_else(|| panic!("重试 32 次仍绑不上固定端口（最后一次：{:?}）", last_err));
+        assert_eq!(server.port(), want, "start_on_port(n) 必须真的绑在 n 上");
         server.close();
     }
 
