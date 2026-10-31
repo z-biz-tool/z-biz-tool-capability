@@ -71,7 +71,7 @@ pub struct CallbackServer {
 }
 
 impl CallbackServer {
-    /// 启动回环服务器。
+    /// 启动回环服务器（端口由内核动态分配）。
     ///
     /// @param path 要处理的路径（不含查询串），例如 `/callback`。
     ///             其它路径一律 404 —— 不多不少只认这一个。
@@ -79,8 +79,26 @@ impl CallbackServer {
     ///
     /// 端口由内核分配（bind 到 0），**调用方必须用返回值里的 `port` 去拼 redirect_uri**。
     pub fn start(path: &str, timeout: Duration) -> std::io::Result<Self> {
+        Self::start_on_port(path, timeout, 0)
+    }
+
+    /// 启动回环服务器，可指定**固定端口**。
+    ///
+    /// @param port 绑定的端口。`0` = 由内核分配（动态端口，推荐）；
+    ///             其它值 = 固定端口（该端口已被占用时启动失败）。
+    ///
+    /// ## 为什么需要固定端口
+    ///
+    /// 绝大多数 OIDC 服务端要求 `redirect_uri` 与预登记值**精确匹配**。
+    /// 动态端口每次登录都不同 ⇒ 这类服务端必须改用固定端口，
+    /// 并把同一个回环地址登记到 ctc 侧。
+    ///
+    /// 固定端口的代价：端口可预测（可被同机其它进程抢注），
+    /// 且被占用时登录直接失败。所以**默认仍是动态端口** ——
+    /// 只有确认 ctc 侧不接受动态端口时才显式指定。
+    pub fn start_on_port(path: &str, timeout: Duration, port: u16) -> std::io::Result<Self> {
         // 只绑回环地址 —— 见模块文档的「安全性」。
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let listener = TcpListener::bind(("127.0.0.1", port))?;
         let port = listener.local_addr()?.port();
 
         // 立刻把监听 socket 的写超时设上：客户端连上后不吭声时，
@@ -456,5 +474,34 @@ mod tests {
         let a = CallbackServer::start("/callback", Duration::from_secs(5)).expect("start");
         let b = CallbackServer::start("/callback", Duration::from_secs(5)).expect("start");
         assert_ne!(a.port(), b.port(), "两个服务器不该拿到同一个端口");
+    }
+
+    #[test]
+    fn 指定固定端口时绑到那个端口() {
+        // 绝大多数 OIDC 服务端要求 redirect_uri 与预登记值精确匹配，
+        // 而动态端口每次都不同 ⇒ 需要能显式指定端口。
+        //
+        // 先找一个当前空闲的端口（绑 0 拿到端口号，立刻放掉），
+        // 再用 start_on_port 绑它 —— 这是固定端口路径的基本保证。
+        let probe = CallbackServer::start("/callback", Duration::from_secs(1)).expect("probe");
+        let want = probe.port();
+        probe.close();
+
+        let server = CallbackServer::start_on_port("/callback", Duration::from_secs(5), want)
+            .expect("固定端口应能绑上");
+        assert_eq!(server.port(), want, "应该绑到指定的端口");
+        server.close();
+    }
+
+    #[test]
+    fn 固定端口被占用时启动失败() {
+        let first = CallbackServer::start("/callback", Duration::from_secs(5)).expect("start");
+        let busy = first.port();
+        // 同一个端口再绑一次必须失败 —— 不能悄悄退回到动态端口
+        // （那会让拼出去的 redirect_uri 与实际监听的端口对不上，
+        //   表现为浏览器回调发到一个没人接的端口，登录永远等不到）。
+        let second = CallbackServer::start_on_port("/callback", Duration::from_secs(5), busy);
+        assert!(second.is_err(), "端口被占用时必须报错，不能悄悄换端口");
+        first.close();
     }
 }
