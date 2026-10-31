@@ -1,0 +1,26 @@
+[package]
+name = "cap-sso"
+version = "0.1.0"
+edition = "2021"
+description = "zBiz 家族统一 SSO 的 IO 胶水：本地回环回调服务器 / 跨平台开浏览器 / OS 密钥库安全存储（不含 OAuth 协议逻辑）"
+license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+# crates.io 硬限制：keywords 最多 5 个。
+keywords = ["sso", "oauth", "oidc", "tauri", "keychain"]
+categories = ["api-bindings", "authentication"]
+
+[features]
+# Tauri 胶水层（开浏览器）。
+#
+# **默认关闭**：核心能力（回环服务器 / 密钥库）是纯 IO，零 tauri 依赖 ——
+# 这样它能被 node 测试、CLI 工具、非 Tauri 宿主直接复用。Tauri 应用打开这个 feature。
+default = []
+tauri = ["dep:tauri", "dep:tauri-plugin-opener"]
+
+[dependencies]
+tauri = { version = "2", optional = true }
+tauri-plugin-opener = { version = "~2.5.5", optional = true }
+# OS 密钥库：macOS Keychain / Windows Credential Manager / Linux Secret Service。
+# 与 db 仓用的是同一个 crate（4.2.0），跨平台行为一致。
+keyring = "4.2.0"
