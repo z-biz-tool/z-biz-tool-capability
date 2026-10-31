@@ -22,8 +22,8 @@ use serde::{Deserialize, Serialize};
 /// 与 bundle id / 数据目录命名保持一致（`z-biz-tool-db` → `db`），
 /// 减少用户与开发者的心智负担。
 pub const PRODUCT_IDS: &[&str] = &[
-    "aigen", "box", "cpu", "db", "file", "kb", "math", "mind", "music", "note", "pet", "sys",
-    "terminal", "worker",
+    "aigen", "box", "cpu", "db", "file", "history", "kb", "math", "mind", "music", "note", "pet",
+    "remote", "sys", "terminal", "worker",
 ];
 
 /// 判断一个字符串是不是合法的产品 id。

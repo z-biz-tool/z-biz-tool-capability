@@ -41,8 +41,8 @@ fn invisible_repos_are_not_products() {
 fn product_ids_match_the_family() {
     // 家族产品仓清单 —— 新增/移除产品时两边必须同步改
     let expected = [
-        "aigen", "box", "cpu", "db", "file", "kb", "math", "mind", "music", "note", "pet", "sys",
-        "terminal", "worker",
+        "aigen", "box", "cpu", "db", "file", "history", "kb", "math", "mind", "music", "note",
+        "pet", "remote", "sys", "terminal", "worker",
     ];
     let mut a = cap_hub::manifest::PRODUCT_IDS.to_vec();
     let mut b = expected.to_vec();
