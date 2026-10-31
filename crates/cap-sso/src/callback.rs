@@ -169,7 +169,24 @@ fn accept_loop(
 /// 处理一次 HTTP 请求。
 ///
 /// 返回 `Some(query)` 表示这是我们要的回调；`None` 表示路径不匹配，继续等。
-fn handle_connection(stream: TcpStream, path: &str) -> Option<String> {
+fn handle_connection(mut stream: TcpStream, path: &str) -> Option<String> {
+    // **必须显式把连接设为阻塞模式。**
+    //
+    // 监听 socket 是非阻塞的（`accept_loop` 靠 WouldBlock 轮询），
+    // 而 **macOS 的 `accept(2)` 会把 O_NONBLOCK 继承给新连接**（Linux 不会）。
+    // 后果：客户端刚 `connect` 完、请求字节还在路上时，`read_line` 立刻返回
+    // `WouldBlock` —— 而下面所有读都用 `.ok()?` 把它吞成 `None`，
+    // 于是**连 404 都不回**就 `continue`，客户端拿到的是「连接被重置」而不是响应。
+    //
+    // 真实症状：cap-sso 的 `路径不匹配时继续等下一个请求` 在本机 macOS 上偶发红，
+    // 而 Linux / Windows CI 全绿 —— 这就是平台差异造成的假象。
+    //
+    // 改成阻塞后，读会等到数据或 10 秒读超时，读超时是**可观测的错误**
+    // （走 `Err` 分支），不会再被 `.ok()?` 悄悄吞掉。
+    stream
+        .set_nonblocking(false)
+        .expect("把连接设为阻塞模式失败");
+
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
         .ok()?;
@@ -177,20 +194,50 @@ fn handle_connection(stream: TcpStream, path: &str) -> Option<String> {
     let mut reader = BufReader::new(stream.try_clone().ok()?);
 
     // 只读请求行：`GET /callback?code=...&state=... HTTP/1.1`
+    //
+    // 读失败**不能静默 `None`** —— 那样客户端只看到「连接被重置」，
+    // 排查时完全无从下手。回一个 400 并说明原因，再当作「不是回调」继续等。
     let mut request_line = String::new();
-    reader.read_line(&mut request_line).ok()?;
+    if let Err(e) = reader.read_line(&mut request_line) {
+        respond(
+            &mut stream,
+            "400 Bad Request",
+            "text/plain; charset=utf-8",
+            format!("读取请求行失败：{e}").as_bytes(),
+        );
+        return None;
+    }
     let request_line = request_line.trim_end();
     if request_line.is_empty() {
+        respond(
+            &mut stream,
+            "400 Bad Request",
+            "text/plain; charset=utf-8",
+            b"empty request line",
+        );
         return None;
     }
 
     let mut parts = request_line.split_whitespace();
-    let method = parts.next()?;
-    let target = parts.next()?;
+    let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
+        respond(
+            &mut stream,
+            "400 Bad Request",
+            "text/plain; charset=utf-8",
+            b"malformed request line",
+        );
+        return None;
+    };
 
     // OAuth 回调是 GET。POST /callback 之类的一律不当回调处理 ——
     // 否则任何能往这个端口发请求的东西都能伪造一次登录。
     if !method.eq_ignore_ascii_case("GET") {
+        respond(
+            &mut stream,
+            "405 Method Not Allowed",
+            "text/plain; charset=utf-8",
+            b"only GET is accepted here",
+        );
         return None;
     }
 
@@ -227,7 +274,6 @@ fn handle_connection(stream: TcpStream, path: &str) -> Option<String> {
         None => (target, ""),
     };
 
-    let mut stream = stream;
     if raw_path != path {
         // 路径不匹配（favicon.ico 之类）—— 回 404，交由调用方继续等。
         respond(
@@ -301,6 +347,47 @@ mod tests {
             (1024..=65535).contains(&server.port()),
             "端口应从内核分配且非特权，实际 {}",
             server.port()
+        );
+    }
+
+    /// 回归测试：**连接必须被显式设为阻塞模式**。
+    ///
+    /// 背景：监听 socket 是非阻塞的，而 macOS 的 `accept(2)` 会把 O_NONBLOCK
+    /// **继承给新连接**（Linux 不会）。若不显式改回阻塞，客户端刚 connect 完、
+    /// 请求字节还在路上时 `read_line` 立刻返回 `WouldBlock`，
+    /// 被 `.ok()?` 吞成 `None` ⇒ **连 404 都不回**。
+    ///
+    /// 这条测试**故意把字节拆开发**：先 connect 建立连接，隔一小会儿再发请求行 ——
+    /// 这样必然制造出「连接已建立但数据未到」的窗口，
+    /// 在 macOS 上 100% 复现，在 Linux 上也验证同一语义。
+    /// （原测试「路径不匹配时继续等下一个请求」是并发窗口触发，复现率低，
+    ///   不能作为这条语义的守护。）
+    #[test]
+    fn 连接必须被设为阻塞_否则请求字节未到时会静默丢连接() {
+        let server = CallbackServer::start("/callback", Duration::from_secs(5)).expect("start");
+        let port = server.port();
+
+        let handle = std::thread::spawn(move || {
+            // 第一步：只连上，不发任何字节。
+            let mut s = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+            // 第二步：等服务器 accept 完，再发请求行 —— 制造「连接已建立、字节未到」的窗口。
+            std::thread::sleep(Duration::from_millis(300));
+            s.write_all(b"GET /callback?code=DELAYED HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+                .expect("write");
+            s.flush().expect("flush");
+            let mut out = String::new();
+            s.read_to_string(&mut out).expect("read");
+            out
+        });
+
+        let query = server.wait_for_callback().expect("应拿到回调");
+        assert_eq!(query, "code=DELAYED");
+
+        let response = handle.join().expect("请求线程");
+        assert!(
+            response.starts_with("HTTP/1.1 200 OK"),
+            "延迟发送的请求也必须得到正常响应，实际：{}",
+            response
         );
     }
 

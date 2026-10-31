@@ -1,0 +1,31 @@
+# Rust 工具链固定版本。
+#
+# ## 为什么要 pin
+#
+# 之前 CI 用 `dtolnay/rust-toolchain@stable` —— 一个**浮动**的 channel。
+# 后果是：rustc 每发一次新版本，CI 就在**代码没变**的情况下可能变红。
+#
+# 真实案例（2026-10-31）：rustc 1.99.1 给 `#[must_use]` 属性加了新检查
+# （属性无消息 + 返回类型本身已 must_use ⇒ 报错），terminal 仓的
+# async-trait 0.1.91 宏展开正好命中，CI 直接编译失败，而代码一行没改。
+#
+# 浮动 channel 的代价：**工具链升级变成了一个不受你控制、随时可能发生的
+# 线上事件。**
+#
+# ## pin 到哪个版本
+#
+# 1.99.0 —— 已实测全家族在它上面 fmt / test / clippy 全绿。
+#
+# ## 怎么升级
+#
+# 改这里的 version，然后本地跑一遍：
+#
+#     cargo +<新版本> fmt --check
+#     cargo +<新版本> test --lib
+#     cargo +<新版本> clippy --all-targets -- -D warnings
+#
+# 三条都过了再改这个文件并提交。**升级工具链应该是一个可评审的改动，
+# 而不是某天早上自己发生的意外。**
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]

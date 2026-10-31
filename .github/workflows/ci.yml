@@ -31,7 +31,11 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        # 必须与仓根 rust-toolchain.toml 一致：**action 上的 @stable 会覆盖 toml**。
+        # 浮动的 stable 让「工具链升级」变成一个不受你控制、随时可能发生的线上事件 ——
+        # 真实案例（2026-10-31）：rustc 1.99.1 给 `#[must_use]` 加了新检查，
+        # async-trait 宏展开命中，代码一行没改 CI 就红。
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy
 
