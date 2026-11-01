@@ -32,7 +32,7 @@ use serde_json::Value;
 
 use crate::store::{
     atomic_write, config_path, load_config, save_config, shared_secret_store, LlmConfigFile,
-    LlmSecret, StoreError,
+    StoreError,
 };
 
 /// 扫出的一份历史配置。

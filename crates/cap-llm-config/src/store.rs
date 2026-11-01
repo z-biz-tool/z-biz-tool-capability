@@ -151,6 +151,84 @@ fn secret_service_name() -> String {
         .unwrap_or_else(|| SECRET_SERVICE.to_string())
 }
 
+/// 密钥的落点解析：测试文件后端优先，其次 OS 密钥库。
+///
+/// `Z_BIZ_TOOL_SECRET_FILE` 指向一个文件时，密钥读写走 [`FileSecret`] ——
+/// **仅供测试**：Linux CI runner 没有 Secret Service 守护进程，而
+/// db/kb/file 等仓的统一落点测试都要走「保存含密钥」的路径；不切后端
+/// 这些测试在 runner 上必红（`No default store has been set`）。
+/// 生产代码从不设这个变量，因此生产路径保持密钥库，不受影响。
+fn shared_secret_impl() -> std::sync::Arc<dyn LlmSecret + Send + Sync> {
+    if let Some(path) = std::env::var_os("Z_BIZ_TOOL_SECRET_FILE") {
+        if !path.is_empty() {
+            return std::sync::Arc::new(FileSecret {
+                path: PathBuf::from(path),
+            });
+        }
+    }
+    // KeyringSecret 无状态，Arc 包一层满足 trait object 的生命周期
+    std::sync::Arc::new(KeyringSecret::new())
+}
+
+/// 家族共享的密钥库门面。
+///
+/// 返回类型是 trait object 而不是具体的 `KeyringSecret`：
+/// 调用方（十个仓）只依赖 [`LlmSecret`] 能力 —— 这正是 trait 存在的意义。
+/// 返回具体类型的话，测试文件后端就塞不进同一个门面了。
+pub fn shared_secret_store() -> std::sync::Arc<dyn LlmSecret + Send + Sync> {
+    shared_secret_impl()
+}
+
+/// 测试专用文件后端：密钥落 0600 文件。
+///
+/// 为什么不直接给 `KeyringSecret` 加分支：两条后端的生命周期与失败形态
+/// 完全不同（文件后端不依赖任何守护进程），分开类型才好各自单测。
+/// 0600 是底线 —— 它挡的是同机其他用户的读取；测试密钥本来就是假值，
+/// 但「测试代码也守安全习惯」这个习惯本身要一致。
+pub struct FileSecret {
+    path: PathBuf,
+}
+
+impl LlmSecret for FileSecret {
+    fn set(&self, value: &str) -> Result<(), StoreError> {
+        if value.trim().is_empty() {
+            return self.remove();
+        }
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| StoreError::Io(format!("创建 {} 失败: {}", parent.display(), e)))?;
+        }
+        let mut f = fs::File::create(&self.path)
+            .map_err(|e| StoreError::Io(format!("创建密钥文件失败: {}", e)))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(fs::Permissions::from_mode(0o600))
+                .map_err(|e| StoreError::Io(format!("设置密钥文件权限失败: {}", e)))?;
+        }
+        f.write_all(value.as_bytes())
+            .map_err(|e| StoreError::Io(format!("写入密钥文件失败: {}", e)))?;
+        Ok(())
+    }
+
+    fn get(&self) -> Result<Option<String>, StoreError> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
+        fs::read_to_string(&self.path)
+            .map(Some)
+            .map_err(|e| StoreError::Io(format!("读取密钥文件失败: {}", e)))
+    }
+
+    fn remove(&self) -> Result<(), StoreError> {
+        match fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(StoreError::Io(format!("删除密钥文件失败: {}", e))),
+        }
+    }
+}
+
 impl Default for KeyringSecret {
     fn default() -> Self {
         Self::new()
@@ -187,11 +265,6 @@ impl LlmSecret for KeyringSecret {
             Err(e) => Err(StoreError::Secret(e.to_string())),
         }
     }
-}
-
-/// 家族共享的密钥库门面。
-pub fn shared_secret_store() -> KeyringSecret {
-    KeyringSecret::new()
 }
 
 /// 家族统一的配置目录（`~/.z-biz-tool/llm`）。
@@ -417,5 +490,44 @@ mod tests {
         assert_eq!(cfg.base_url, "x");
         assert_eq!(cfg.max_tokens, Some(10));
         assert_eq!(cfg.timeout_ms, Some(20));
+    }
+
+    #[test]
+    fn file_secret_backend_roundtrip_via_shared_store() {
+        // 文件后端走 shared_secret_store 门面：db/kb 的测试在无密钥库的
+        // Linux runner 上能不能跑，取决于这条链路通不通。
+        let dir = crate::testing::IsolatedLlm::new("file-secret-rt");
+        let _ = &dir; // 借活整个测试
+
+        let store = shared_secret_store();
+        store.set("sk-test-value").expect("保存");
+        let got = store.get().expect("读取").expect("应有值");
+        assert_eq!(got, "sk-test-value");
+
+        // 空串 = 删除（与 KeyringSecret 同语义）
+        store.set("").expect("空串删除");
+        assert!(store.get().expect("读取").is_none(), "删除后应读不到");
+
+        // remove 幂等
+        store.remove().expect("幂等删除");
+        store.remove().expect("再删一次仍成功");
+    }
+
+    #[test]
+    fn keyring_set_get_remove_roundtrip_when_store_available() {
+        // 真实密钥库可用时（本地 macOS / 配了 Secret Service 的 CI）走这条；
+        // 不可用时（裸 Linux runner）跳过 —— 跳过是「没跑」，不是「跑过了」。
+        let store = KeyringSecret {
+            service: format!("{}-rt-probe", SECRET_SERVICE),
+            account: SECRET_ACCOUNT.to_string(),
+        };
+        if store.check_available().is_err() {
+            eprintln!("[SKIP] 本环境无可用密钥库，keyring roundtrip 不跑");
+            return;
+        }
+        store.set("sk-kb-rt").expect("set");
+        assert_eq!(store.get().expect("get"), Some("sk-kb-rt".to_string()));
+        store.remove().expect("remove");
+        assert_eq!(store.get().expect("get"), None);
     }
 }

@@ -82,6 +82,7 @@ pub struct IsolatedLlm {
     root: PathBuf,
     dir_var: Option<std::ffi::OsString>,
     service_var: Option<std::ffi::OsString>,
+    secret_file_var: Option<std::ffi::OsString>,
 }
 
 impl IsolatedLlm {
@@ -101,13 +102,18 @@ impl IsolatedLlm {
     pub fn with_root(root: PathBuf) -> Self {
         let dir_var = std::env::var_os("Z_BIZ_TOOL_LLM_DIR");
         let service_var = std::env::var_os("Z_BIZ_TOOL_SECRET_SERVICE");
+        let secret_file_var = std::env::var_os("Z_BIZ_TOOL_SECRET_FILE");
 
         let _ = std::fs::create_dir_all(&root);
         std::env::set_var("Z_BIZ_TOOL_LLM_DIR", &root);
-        // 钥匙串 service 带测试后缀 ⇒ 测试条目不会落到用户的真实 service 上。
-        // ⚠️ 这**不会**完全避免污染：钥匙串里会留下一条
-        // `z-biz-tool-test-*` 条目。所以测试应当在结束时删掉它
-        // （[`IsolatedLlm::cleanup`]），否则钥匙串里会积累垃圾。
+        // 密钥走**文件后端**（store.rs 的 FileSecret）：CI runner（Linux 无
+        // Secret Service、macOS headless 钥匙串会话不可用）没有 OS 密钥库，
+        // 走 keyring 的测试在那里必红（"No default store has been set"）。
+        // 文件后端落在隔离目录内，三平台行为一致；密钥是测试假值，
+        // 0600 权限由 FileSelf 保证。生产代码从不设这个变量 ⇒ 生产路径不变。
+        std::env::set_var("Z_BIZ_TOOL_SECRET_FILE", root.join("test-secret-file"));
+        // 钥匙串 service 后缀仍设置：cleanup 顺带清掉历史版本可能在真实
+        // 钥匙串里留下的测试条目，兼容未升级的下游测试。
         std::env::set_var(
             "Z_BIZ_TOOL_SECRET_SERVICE",
             format!("z-biz-tool-test-{}", std::process::id()),
@@ -117,6 +123,7 @@ impl IsolatedLlm {
             root,
             dir_var,
             service_var,
+            secret_file_var,
         }
     }
 
@@ -161,6 +168,10 @@ impl Drop for IsolatedLlm {
         match self.service_var.take() {
             Some(v) => std::env::set_var("Z_BIZ_TOOL_SECRET_SERVICE", v),
             None => std::env::remove_var("Z_BIZ_TOOL_SECRET_SERVICE"),
+        }
+        match self.secret_file_var.take() {
+            Some(v) => std::env::set_var("Z_BIZ_TOOL_SECRET_FILE", v),
+            None => std::env::remove_var("Z_BIZ_TOOL_SECRET_FILE"),
         }
     }
 }
