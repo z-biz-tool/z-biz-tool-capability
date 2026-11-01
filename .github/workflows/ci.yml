@@ -57,3 +57,50 @@ jobs:
       # 格式差异与平台无关，本地就能量 ⇒ 可以安全地加成硬门禁。
       - name: Format check
         run: cargo fmt --all --check
+
+  # 黄金夹具对账：Rust 权威输出 必须与 shared 侧的夹具字节一致。
+  #
+  # 为什么要有这道闸：双语言对账的基准 `shared/tests/fixtures/hash-golden.json`
+  # 由**本仓**的 `crates/cap-hash/examples/golden.rs` 生成，但文件存在**另一个仓**里。
+  # 于是有一个方向没人看：改了 Rust 实现 → 夹具没重新生成 →
+  # TS 孪生与夹具仍然一致（shared 的 npm test 照样绿），
+  # **而 TS 与 Rust 已经不一致了**。谁都不报，因为两边各自都"自洽"。
+  #
+  # 这道 job 堵的就是那个方向：Rust 是金标，由金标自己来核对夹具。
+  # 平台无关（纯字节计算），所以只在 ubuntu 上跑一次，不进三平台矩阵。
+  golden:
+    name: 黄金夹具对账（Rust ↔ shared）
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      # 两个 checkout 都给显式 path：actions/checkout 在同 job 里出现带 path 的 step 时，
+      # 其它 step 的落点会变得不可预测（shared 仓 CI 里踩过一次，见那里的注释）。
+      - uses: actions/checkout@v4
+        with:
+          path: capability
+
+      - uses: dtolnay/rust-toolchain@1.99.0
+
+      # GitHub 新版 token 格式会写坏 cargo config，导致后续 cargo 报
+      # "Unexpected character at row 2, col 24"，删掉让它重新生成
+      - name: Reset broken cargo config
+        shell: bash
+        run: rm -f "$HOME/.cargo/config.toml"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: z-biz-tool/z-biz-tool-shared
+          path: shared
+
+      - name: 生成黄金样例并与 shared 夹具字节对账
+        working-directory: ${{ github.workspace }}/capability
+        run: |
+          set -euo pipefail
+          cargo run -q --locked -p cap-hash --example golden > "${RUNNER_TEMP}/hash-golden.json"
+          if ! diff -u "${GITHUB_WORKSPACE}/shared/tests/fixtures/hash-golden.json" "${RUNNER_TEMP}/hash-golden.json"; then
+            echo "❌ Rust 权威输出与 shared 夹具不一致 —— 两边已经漂移了"
+            echo "   修法：cargo run -q -p cap-hash --example golden > ../z-biz-tool-shared/tests/fixtures/hash-golden.json"
+            exit 1
+          fi
+          echo "✅ 黄金夹具与 Rust 权威输出字节一致"
+
