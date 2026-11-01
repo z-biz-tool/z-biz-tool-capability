@@ -33,9 +33,11 @@ mod paths;
 mod test_support;
 
 pub mod ebook;
+pub mod ooxml;
 pub mod pdf;
 
 pub use ebook::{get_epub_cover, parse_epub, parse_mobi, Chapter, EpubBook};
+pub use ooxml::{extract_docx_text, extract_pptx_text, DocxText, PptxText};
 pub use pdf::compress::{compress_pdf_blocking, CompressReport};
 pub use pdf::image::{extract_pdf_images_blocking, ExtractReport};
 pub use pdf::ops::{get_pdf_pages, merge_pdfs, split_pdf, PdfPageInfo};
@@ -46,7 +48,7 @@ pub use pdf::watermark::watermark_pdf_blocking;
 ///
 /// 供调用方做「这个文件我能不能处理」的前置判断，避免每个下游各写一份表 ——
 /// 那份表早晚和实际实现长歪。
-pub const SUPPORTED_EXTENSIONS: &[&str] = &["pdf", "epub", "mobi"];
+pub const SUPPORTED_EXTENSIONS: &[&str] = &["pdf", "epub", "mobi", "docx", "pptx"];
 
 /// 按扩展名判断是否可处理（大小写不敏感）。
 pub fn supports(path: impl AsRef<std::path::Path>) -> bool {
