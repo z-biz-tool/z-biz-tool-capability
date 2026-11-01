@@ -45,6 +45,18 @@ jobs:
         shell: bash
         run: rm -f "$HOME/.cargo/config.toml" "$USERPROFILE/.cargo/config.toml"
 
+      # cap-screen 走 xcap，Linux 上一串系统库跑不掉（先例见 remote 仓
+      # build-client.yml 的同名 step，那里是一轮轮试出来的完整清单）：
+      #   - libpipewire-0.3-dev：Wayland 采集腿，libspa-sys 的 build script
+      #     用 pkg-config 找它，缺了直接 "Package 'libpipewire-0.3' not found"
+      #   - wayland/xcb/dbus：xcap 的 Wayland-client 与 X11 腿
+      #   - libclang-dev：bindgen 需要
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpipewire-0.3-dev libclang-dev libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libdbus-1-dev libxdo-dev libgbm-dev libwayland-dev
+
       - name: Cargo test
         run: cargo test --workspace
 
