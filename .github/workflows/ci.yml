@@ -21,7 +21,7 @@ jobs:
         include:
           - platform: macos-latest
             label: macOS
-          - platform: ubuntu-22.04
+          - platform: ubuntu-24.04
             label: Linux
           - platform: windows-latest
             label: Windows
@@ -54,6 +54,8 @@ jobs:
       #   - libegl1-mesa-dev：libgbm → khronos-egl 的腿，缺了报
       #     "Package 'egl', required by 'virtual:world', not found"
       #     （第二轮实锤；remote 仓没踩是因为 webkit2gtk 会把它带进来）
+      # runner 用 24.04：libspa 0.10（xcap→pipewire 腿）需要新的 SPA 头，
+      # 22.04 的 libspa-0.2-dev 编不过（第三轮实锤；remote 仓先例同用 24.04）。
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
