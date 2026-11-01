@@ -51,11 +51,14 @@ jobs:
       #     用 pkg-config 找它，缺了直接 "Package 'libpipewire-0.3' not found"
       #   - wayland/xcb/dbus：xcap 的 Wayland-client 与 X11 腿
       #   - libclang-dev：bindgen 需要
+      #   - libegl1-mesa-dev：libgbm → khronos-egl 的腿，缺了报
+      #     "Package 'egl', required by 'virtual:world', not found"
+      #     （第二轮实锤；remote 仓没踩是因为 webkit2gtk 会把它带进来）
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpipewire-0.3-dev libclang-dev libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libdbus-1-dev libxdo-dev libgbm-dev libwayland-dev
+          sudo apt-get install -y libpipewire-0.3-dev libclang-dev libxcb1-dev libxcb-randr0-dev libxcb-shm0-dev libdbus-1-dev libxdo-dev libgbm-dev libwayland-dev libegl1-mesa-dev
 
       - name: Cargo test
         run: cargo test --workspace
