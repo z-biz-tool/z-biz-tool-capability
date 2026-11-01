@@ -83,7 +83,13 @@ fn legacy_sites() -> Vec<LegacySite> {
             rel: "AppData/Roaming/com.zifang.z-biz-tool-file/llm.json",
             source: "file",
         },
-        // db：app_data_dir()/com.zifang.z-biz-tool-db/ai_config.json
+        // db：**两处**。db 仓的 `get_data_dir()` 用的是
+        // `dirs::data_local_dir()/z-biz-tool-db`（**没有 bundle id 前缀**），
+        // 而 bundle id `com.zifang.z-biz-tool-db` 那条路是 Tauri 的
+        // `app_data_dir()` —— 两者不是同一个目录，只登记一条就会漏扫。
+        //
+        // 漏扫的后果很具体：存量用户的明文 Key 既不会被搬走（功能退化），
+        // 也不会被抹掉（**明文仍留在盘上**）—— 比不迁移更糟。
         LegacySite {
             rel: "Library/Application Support/com.zifang.z-biz-tool-db/ai_config.json",
             source: "db",
@@ -94,6 +100,19 @@ fn legacy_sites() -> Vec<LegacySite> {
         },
         LegacySite {
             rel: "AppData/Roaming/com.zifang.z-biz-tool-db/ai_config.json",
+            source: "db",
+        },
+        // db 真实落点：dirs::data_local_dir()/z-biz-tool-db/ai_config.json
+        LegacySite {
+            rel: "Library/Application Support/z-biz-tool-db/ai_config.json",
+            source: "db",
+        },
+        LegacySite {
+            rel: ".local/share/z-biz-tool-db/ai_config.json",
+            source: "db",
+        },
+        LegacySite {
+            rel: "AppData/Local/z-biz-tool-db/ai_config.json",
             source: "db",
         },
         // kb：app_data_dir()/com.zifang.z-biz-tool-kb/llm_config.json
@@ -275,8 +294,8 @@ pub fn migrate_legacy_in(home: &Path) -> Result<MigrationReport, StoreError> {
     };
 
     let cfg = LlmConfigFile {
-        preset: first.provider.clone(),
-        provider: first.provider.clone(),
+        preset: provider_of(&first),
+        provider: provider_of(&first),
         base_url: first.base_url.clone(),
         model: first.model.clone(),
         temperature: first.temperature,
@@ -315,6 +334,44 @@ pub fn migrate_legacy_in(home: &Path) -> Result<MigrationReport, StoreError> {
     ));
 
     Ok(report)
+}
+
+/// 迁移后写进统一落点的供应商标识。
+///
+/// **不能留空**：各仓的 `to_cap` 走 `ProviderKind::parse_with_preset`，
+/// 那个函数对空串直接报错（"未选择 AI 提供商"）—— 迁移把配置搬过来了，
+/// 却因为没有 provider 而让用户「明明配过却说没配」。
+///
+/// 旧文件里没写 provider 的（db 仓的 `ai_config.json` 就只有
+/// base_url / api_key / model 三个字段），按地址猜：
+/// - 命中某家厂商的官方地址 → 记那家的 preset id；
+/// - 猜不出 → 记 `custom`（自定义 OpenAI 兼容地址），语义上最保守，
+///   而且 `base_url` 原样保留，用户照样能用。
+fn provider_of(candidate: &LegacyCandidate) -> String {
+    let p = candidate.provider.trim();
+    if !p.is_empty() {
+        return p.to_string();
+    }
+    if let Some(preset) = presets_match(&candidate.base_url) {
+        return preset;
+    }
+    "custom".to_string()
+}
+
+/// 按地址反查预设 id。命中不了返回 `None`。
+fn presets_match(base_url: &str) -> Option<String> {
+    let url = base_url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    cap_llm::preset::PRESETS
+        .iter()
+        .find(|p| {
+            !p.base_url.is_empty()
+                && (url == p.base_url
+                    || url.starts_with(&format!("{}/", p.base_url.trim_end_matches('/'))))
+        })
+        .map(|p| p.id.to_string())
 }
 
 /// 把旧文件里的密钥字段抹掉，**只抹密钥**，其余字段原样保留。
@@ -490,5 +547,124 @@ mod tests {
         fs::write(&path, r#"{"provider":"openai","api_key":""}"#).unwrap();
         assert!(!scrub_plaintext_key(&path).expect("应成功"));
         fs::remove_dir_all(&dir).ok();
+    }
+
+    // ============ db 仓落点与 provider 反查 ============
+
+    /// db 仓的旧落点是 `dirs::data_local_dir()/z-biz-tool-db/ai_config.json`
+    /// —— **没有 bundle id 前缀**。迁移器只登记 `com.zifang.z-biz-tool-db`
+    /// 那一族时，存量用户的明文 Key 既不会被搬走、也不会被抹掉。
+    ///
+    /// 这条测试钉住「真实路径也在扫描范围内」。
+    #[test]
+    fn db_real_data_local_dir_path_is_scanned() {
+        let sites = legacy_sites();
+        let rels: Vec<&str> = sites.iter().map(|s| s.rel).collect();
+        for expect in [
+            "Library/Application Support/z-biz-tool-db/ai_config.json",
+            ".local/share/z-biz-tool-db/ai_config.json",
+            "AppData/Local/z-biz-tool-db/ai_config.json",
+        ] {
+            assert!(
+                rels.contains(&expect),
+                "db 真实落点没登记，存量用户的明文 Key 不会被搬走也不会被抹掉：缺 {}",
+                expect
+            );
+        }
+        // bundle id 那一族也要留着 —— 早期版本可能落在那儿
+        assert!(
+            rels.contains(&"Library/Application Support/com.zifang.z-biz-tool-db/ai_config.json")
+        );
+    }
+
+    /// db 旧配置只有 base_url / api_key / model，**没有 provider**。
+    /// 迁移后 provider 若为空，各仓的 `to_cap` 会报「未选择 AI 提供商」——
+    /// 用户明明配过却被说没配。
+    #[test]
+    fn provider_is_guessed_from_the_legacy_base_url() {
+        let c = LegacyCandidate {
+            path: PathBuf::from("/tmp/x"),
+            source: "db",
+            provider: String::new(),
+            base_url: "https://api.deepseek.com/v1".into(),
+            model: "deepseek-chat".into(),
+            api_key: "sk-x".into(),
+            temperature: None,
+            timeout_ms: None,
+        };
+        assert_eq!(provider_of(&c), "deepseek", "官方地址应反查回厂商 id");
+
+        // 猜不出就落到 custom，语义最保守，地址原样保留
+        let c2 = LegacyCandidate {
+            base_url: "https://my-proxy.internal/v1".into(),
+            ..c.clone()
+        };
+        assert_eq!(provider_of(&c2), "custom");
+
+        // 旧文件本来就写了 provider —— 以它为准
+        let c3 = LegacyCandidate {
+            provider: "openai".into(),
+            base_url: "https://api.deepseek.com/v1".into(),
+            ..c.clone()
+        };
+        assert_eq!(provider_of(&c3), "openai");
+    }
+
+    /// 反查要认「官方地址 + 斜杠后缀」（用户常把 /v1 之外的路径也带上）。
+    #[test]
+    fn preset_lookup_tolerates_path_suffixes() {
+        assert_eq!(
+            presets_match("https://api.deepseek.com/v1"),
+            Some("deepseek".to_string())
+        );
+        assert_eq!(
+            presets_match("https://api.deepseek.com/v1/chat/completions"),
+            Some("deepseek".to_string())
+        );
+        assert_eq!(presets_match("https://my-proxy.internal/v1"), None);
+        assert_eq!(presets_match(""), None);
+    }
+
+    /// 端到端：db 的旧文件被搬进统一落点，明文被抹掉。
+    ///
+    /// 用 `migrate_legacy_in` 而不是全量版 —— 改 `HOME` 在 macOS 上会
+    /// 让 Security 框架找不到默认钥匙串，隔离与密钥库不能同时成立。
+    #[test]
+    fn db_legacy_file_is_migrated_and_scrubbed() {
+        // 环境变量是进程级的：与 testing.rs 里的测试共用同一把 crate 级锁，
+        // 否则并发时后构造的 IsolatedLlm 会抢走目录，让本测试读不到自己的配置。
+        let _guard = crate::testing::lock_llm_env();
+        let _iso = crate::testing::IsolatedLlm::new("db-migrate");
+
+        let home =
+            std::env::temp_dir().join(format!("cap-llm-config-dbhome-{}", std::process::id()));
+        let legacy_dir = home.join("Library/Application Support/z-biz-tool-db");
+        fs::create_dir_all(&legacy_dir).unwrap();
+        let legacy = legacy_dir.join("ai_config.json");
+        fs::write(
+            &legacy,
+            r#"{"base_url":"https://api.deepseek.com/v1","api_key":"sk-db-plaintext","model":"deepseek-chat"}"#,
+        )
+        .unwrap();
+
+        let report = migrate_legacy_in(&home).expect("迁移应成功");
+        assert!(report.migrated, "db 的旧文件应被搬走：{:?}", report);
+        assert_eq!(report.from.as_deref(), Some("db"));
+        assert!(report.plaintext_scrubbed, "旧文件里的明文 Key 应被抹掉");
+
+        let cfg = load_config().expect("读配置").expect("统一落点应有配置");
+        assert_eq!(cfg.preset, "deepseek", "provider 应按地址反查出来");
+        assert_eq!(cfg.base_url, "https://api.deepseek.com/v1");
+        assert_eq!(cfg.model, "deepseek-chat");
+
+        // 旧文件里不该再有明文
+        let after = fs::read_to_string(&legacy).unwrap();
+        assert!(
+            !after.contains("sk-db-plaintext"),
+            "旧文件里仍有明文 Key：{}",
+            after
+        );
+
+        fs::remove_dir_all(&home).ok();
     }
 }

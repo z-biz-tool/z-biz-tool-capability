@@ -40,9 +40,32 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard};
 
 /// 计数器：保证同一进程内多次 `new` 得到不同的目录。
 static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// crate 级的**环境变量锁**。
+///
+/// 统一落点的隔离靠环境变量（见本模块文档），而环境变量是**进程级**的 ——
+/// 两个测试同时改 `Z_BIZ_TOOL_LLM_DIR`，后构造的那个会覆盖前一个的设置，
+/// 前一个的断言随即失败。症状是「单跑绿、全跑红」，且红的测试与代码无关。
+///
+/// 所以**凡是本 crate 里碰统一落点的测试都要先拿这把锁**。
+/// 下游各仓（file / kb / db …）在自己的进程里跑，各自带自己的锁即可 ——
+/// 进程之间互不干扰。
+#[cfg(test)]
+pub(crate) static LLM_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+/// 拿环境变量锁。锁被 poison 时照样放行 ——
+/// 一个测试 panic 不该让后续所有测试都拒绝执行。
+#[cfg(test)]
+pub(crate) fn lock_llm_env() -> MutexGuard<'static, ()> {
+    LLM_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// 隔离的统一落点。
 ///
@@ -156,6 +179,7 @@ mod tests {
 
     #[test]
     fn isolation_redirects_the_config_path() {
+        let _guard = lock_llm_env();
         let iso = IsolatedLlm::new("redirect");
         let path = crate::config_path().expect("配置路径");
         assert!(
@@ -168,6 +192,7 @@ mod tests {
 
     #[test]
     fn isolation_is_undone_on_drop() {
+        let _guard = lock_llm_env();
         let before = std::env::var_os("Z_BIZ_TOOL_LLM_DIR");
         {
             let _iso = IsolatedLlm::new("undone");
@@ -182,6 +207,7 @@ mod tests {
 
     #[test]
     fn isolation_uses_a_distinct_keyring_service() {
+        let _guard = lock_llm_env();
         let iso = IsolatedLlm::new("service");
         let svc = std::env::var("Z_BIZ_TOOL_SECRET_SERVICE").expect("service");
         assert_ne!(

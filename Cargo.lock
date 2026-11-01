@@ -668,6 +668,7 @@ dependencies = [
 name = "cap-llm-config"
 version = "0.1.0"
 dependencies = [
+ "cap-llm",
  "keyring",
  "serde",
  "serde_json",

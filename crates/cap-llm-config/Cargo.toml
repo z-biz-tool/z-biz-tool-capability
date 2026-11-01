@@ -26,3 +26,5 @@ serde_json = { workspace = true }
 # 与 cap-sso 用同一个 crate（4.2.0），跨平台行为一致。
 keyring = "4.2.0"
 tauri = { version = "2", optional = true }
+# 供应商预设目录：迁移时按旧地址反查厂商（db 仓旧配置没有 provider 字段）。
+cap-llm = { path = "../cap-llm" }
