@@ -665,6 +665,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-llm-config"
+version = "0.1.0"
+dependencies = [
+ "keyring",
+ "serde",
+ "serde_json",
+ "tauri",
+]
+
+[[package]]
 name = "cap-meeting"
 version = "0.1.0"
 dependencies = [

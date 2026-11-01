@@ -1,0 +1,28 @@
+[package]
+name = "cap-llm-config"
+version = "0.1.0"
+edition = "2021"
+description = "z-biz-tool 家族统一的 LLM 配置存储：单一落点、OS 密钥库密钥、旧配置迁移"
+license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+# crates.io 硬限制：keywords 最多 5 个。
+keywords = ["llm", "config", "keychain", "z-biz", "tauri"]
+categories = ["api-bindings", "config"]
+
+[features]
+# Tauri 胶水层。
+#
+# **默认关闭**：核心能力（路径解析、配置读写、迁移判定）是纯 IO，
+# 零 tauri 依赖 —— 这样它能被 node 测试、CLI 工具、非 Tauri 宿主直接复用。
+# Tauri 应用打开这个 feature。
+default = []
+tauri = ["dep:tauri"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# OS 密钥库：macOS Keychain / Windows Credential Manager / Linux Secret Service。
+# 与 cap-sso 用同一个 crate（4.2.0），跨平台行为一致。
+keyring = "4.2.0"
+tauri = { version = "2", optional = true }

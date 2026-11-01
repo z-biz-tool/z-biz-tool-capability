@@ -88,6 +88,7 @@ mod asr;
 mod chat;
 mod config;
 mod error;
+mod failure;
 mod message;
 mod presets;
 mod sse;
@@ -97,6 +98,7 @@ pub use asr::{transcribe, transcribe_file, Segment, Transcript, TranscriptionReq
 pub use chat::{chat, chat_stream, chat_stream_if, chat_with_tools, list_models, ping};
 pub use config::{is_private_endpoint, Action, LlmConfig, Protocol, ProviderKind};
 pub use error::{redact, truncate_chars, ErrorKind, LlmError};
+pub use failure::{focus_for, hint, kind_key, Focus, LlmFailure};
 pub use message::{ChatReply, Delta, Message, Role, ToolDef, Usage};
 
 /// 供应商预设目录（借鉴 cc-switch 的 preset 模型）。
