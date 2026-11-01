@@ -1,12 +1,11 @@
 [package]
 name = "cap-img"
-# 0.3.0（本轮行为收紧，**尚未发布**，crates.io 上现行仍是 0.2.0）：
-#   - 输出格式改由**目标扩展名**决定（此前按源图扩展名 ⇒ 产出「名字说谎」的文件）
-#   - export 新增「format 与目标扩展名必须一致」校验（与 save_bytes 同一规则）
-#   - 目标扩展名认不出来时报错，不再悄悄写成 PNG
-#   - 修 crop 坐标溢出（debug panic / release 回绕）与 EXIF IFD0 越界 panic
-# 破坏性变更（0.x 语义下 minor 即 breaking）⇒ 必须 bump，不能复用 0.2.0。
-version = "0.3.0"
+# 0.4.0（EXIF 全量读写，破坏性变更 ⇒ 0.x 语义下 minor 即 breaking）：
+#   - 引入 kamadak-exif，替换手写的 parse_exif_minimal（只认 5 个 ASCII 标签）
+#   - EXIF 读：全 tag 枚举 + 类型化值 + GPS/Exif SubIFD 归一化
+#   - EXIF 写：写回不丢未知 tag，可增删改指定字段，可按 tag 清除
+#   - info() 的 exif 字段形状变化（HashMap<String,String> → ExifData）⇒ 破坏性
+version = "0.4.0"
 edition = "2021"
 description = "图片处理原语：信息/缩略图/缩放/旋转/翻转/裁剪/滤镜/编码/EXIF（路径进→路径出，无状态）"
 license = "MIT"
@@ -19,7 +18,17 @@ categories = ["multimedia::images", "encoding"]
 image = { workspace = true }
 base64 = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
+# EXIF 全量读写。此前 cap-img 手写了一份最小解析（只认 Make/Model/Software/
+# DateTime/Copyright 五个 ASCII 标签），EXIF 里 90% 的字段——光圈、快门、ISO、
+# 焦距、GPS 坐标、Orientation、镜头型号——全都读不出来；而 file 仓另有一份
+# 基于 kamadak-exif 的私有实现（image_exif.rs）。同一件事两套实现 ⇒ 本 crate
+# 统一吃 kamadak-exif，与 file 侧对齐，向全量能力看齐。
+#
+# 版本与 file 仓保持一致（0.6），免得同一份 EXIF 在两处被解析出不同结果。
+kamadak-exif = "0.6"
 
 [dev-dependencies]
 image = { workspace = true }
 base64 = { workspace = true }
+kamadak-exif = "0.6"

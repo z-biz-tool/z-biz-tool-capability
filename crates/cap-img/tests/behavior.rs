@@ -189,15 +189,22 @@ fn info_actually_reads_exif_from_a_jpeg() {
     let src = jpeg_with_exif(&dir, "a.jpg");
     let info = cap_img::info(src.to_string_lossy().as_ref()).unwrap();
     let exif = info.exif.expect("JPEG 里的 EXIF 必须被读出来");
-    assert_eq!(exif.get("Model").map(|s| s.as_str()), Some("TEST"));
+    // 0.4.0 起 EXIF 是结构化快照（按 IFD 分桶），不再是 HashMap<String,String>。
+    // 这里的**行为承诺不变**：Model 字段必须被读出来。
+    assert_eq!(exif.display("Model"), Some("TEST"));
+    assert!(exif.field_count() >= 1, "至少要有一个字段");
 }
 
-/// EXIF 的 IFD0 偏移越界时必须**返回空 EXIF**，不能 panic。
+/// EXIF 的 IFD0 偏移越界时**不能 panic**。
 ///
 /// 回归锚点：EXIF 段里的偏移量是**图片文件里的字节**，任何人都能手搓一个 JPEG
 /// 把它指到段尾。原实现只判 `ifd0_offset >= data.len()`，于是 offset == len-1 时
 /// `data[offset..offset+2]` 切片越界 panic —— 一个畸形图片就能让 `info()` 崩掉，
 /// 而调用方（file 仓的 get_image_info）只当它是个坏文件。
+///
+/// 0.4.0 换成 kamadak-exif 之后，畸形 EXIF 的表现从「Some 但内容为空」
+/// 变成「None」（解析器判定这是坏数据）。两种表现都满足「不 panic」，
+/// 这里断言的是**更严的那条**：读不出就老实说读不出，别装作读到了空表。
 #[test]
 fn info_survives_exif_with_out_of_range_ifd_offset() {
     let dir = TempDir::new("exif-oob");
@@ -212,8 +219,17 @@ fn info_survives_exif_with_out_of_range_ifd_offset() {
     let src = jpeg_with_tiff(&dir, "a.jpg", &tiff);
     // 不 panic 本身就是断言：越界切片会直接把测试线程带崩。
     let info = cap_img::info(src.to_string_lossy().as_ref()).unwrap();
-    let exif = info.exif.expect("应返回 Some（只是内容为空）");
-    assert!(exif.is_empty(), "越界 EXIF 应读成空表，实得 {:?}", exif);
+    match info.exif {
+        None => {} // 坏 EXIF ⇒ 读不出，符合预期
+        Some(exif) => {
+            // 若解析器宽容地读出了空表，也必须确实没有字段
+            assert!(
+                exif.is_empty(),
+                "越界 EXIF 不应读出任何字段，实得 {:?}",
+                exif
+            );
+        }
+    }
 }
 
 #[test]

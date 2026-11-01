@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+pub mod exif;
+
+pub use exif::{ExifData, ExifEdit, ExifField, ExifIfd, ExifValue, ExifValueKind};
+
 /// 图片信息
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ImageInfo {
@@ -18,7 +22,12 @@ pub struct ImageInfo {
     pub format: String,
     pub size: u64,
     pub has_alpha: bool,
-    pub exif: Option<std::collections::HashMap<String, String>>,
+    /// EXIF 快照（结构化，按 IFD 分桶）
+    ///
+    /// **形状变更（0.4.0）**：此前是 `Option<HashMap<String, String>>` ——
+    /// 只装五个 ASCII 标签的扁平表。现在的形状是 `ExifData`，
+    /// 覆盖全部标签与类型。旧的调用方需要改成读 `exif.primary.fields` 等。
+    pub exif: Option<ExifData>,
 }
 
 /// 获取图片信息
@@ -32,13 +41,11 @@ pub fn info(path: impl AsRef<Path>) -> Result<ImageInfo, String> {
 
     let format = detect_format(path.as_ref());
 
-    // 尝试读取 EXIF（JPEG / TIFF）。注意 detect_format 返回的是小写扩展名，
-    // 早先这里比的是 "JPEG"/"TIFF"，分支永远走不到 —— 属性面板因此从不显示 EXIF。
-    let exif = if matches!(format.as_str(), "jpg" | "tiff") {
-        read_basic_exif(path.as_ref())
-    } else {
-        None
-    };
+    // 读取 EXIF：走 kamadak-exif（0.4.0 起），覆盖 JPEG/TIFF/PNG/WebP。
+    //
+    // 读失败**不算错误** —— 一张没有 EXIF 的图是完全正常的，
+    // 属性面板只是不显示 EXIF 区而已。所以这里吞掉错误返回 None。
+    let exif = exif::read(path.as_ref()).unwrap_or(None);
 
     Ok(ImageInfo {
         width,
@@ -48,93 +55,6 @@ pub fn info(path: impl AsRef<Path>) -> Result<ImageInfo, String> {
         has_alpha,
         exif,
     })
-}
-
-/// 简单 EXIF 解析（只取几个常用 tag）
-fn read_basic_exif(path: &Path) -> Option<std::collections::HashMap<String, String>> {
-    let bytes = fs::read(path).ok()?;
-    // JPEG: APP1 段 (0xFFE1) + "Exif\0\0" 签名
-    if bytes.len() < 14 || &bytes[0..2] != b"\xff\xd8" {
-        return None;
-    }
-    let mut i = 2;
-    while i + 4 < bytes.len() {
-        if bytes[i] != 0xff {
-            return None;
-        }
-        let marker = bytes[i + 1];
-        let seg_len = u16::from_be_bytes([bytes[i + 2], bytes[i + 3]]) as usize;
-        if marker == 0xe1 && &bytes[i + 4..i + 10] == b"Exif\0\0" {
-            // 找到 EXIF 段
-            return Some(parse_exif_minimal(&bytes[i + 10..i + 2 + seg_len]));
-        }
-        if marker == 0xda {
-            // 图像数据开始，停止
-            return None;
-        }
-        i += 2 + seg_len;
-    }
-    None
-}
-
-fn parse_exif_minimal(data: &[u8]) -> std::collections::HashMap<String, String> {
-    use std::collections::HashMap;
-    let mut map = HashMap::new();
-    if data.len() < 8 {
-        return map;
-    }
-    let little_endian = matches!(data[0], b'I');
-    let read_u16 = |d: &[u8]| -> u16 {
-        if little_endian {
-            u16::from_le_bytes([d[0], d[1]])
-        } else {
-            u16::from_be_bytes([d[0], d[1]])
-        }
-    };
-    let read_u32 = |d: &[u8]| -> u32 {
-        if little_endian {
-            u32::from_le_bytes([d[0], d[1], d[2], d[3]])
-        } else {
-            u32::from_be_bytes([d[0], d[1], d[2], d[3]])
-        }
-    };
-
-    let ifd0_offset = read_u32(&data[4..8]) as usize;
-    // 越界检查必须覆盖**要读的整个区间**，不是只比起点。
-    // 原先只判 `ifd0_offset >= data.len()`，于是 offset == len-1 时
-    // `data[offset..offset+2]` 直接切片越界 panic —— 而这个 offset 是**图片文件里
-    // 的字节**，任何人都能手搓一个 JPEG 触发。实测：塞一段 offset=8、长度 9 的
-    // EXIF 进真 JPEG，`info()` 直接 panic（不是返回 Err）。
-    if ifd0_offset + 2 > data.len() {
-        return map;
-    }
-    let ifd0_count = read_u16(&data[ifd0_offset..ifd0_offset + 2]) as usize;
-    for i in 0..ifd0_count {
-        let entry = ifd0_offset + 2 + i * 12;
-        if entry + 12 > data.len() {
-            break;
-        }
-        let tag = read_u16(&data[entry..entry + 2]);
-        // 0x010F Make, 0x0110 Model, 0x0131 Software, 0x0132 DateTime, 0x8825 GPS
-        let (name, val_offset) = match tag {
-            0x010F => ("Make", read_u32(&data[entry + 8..entry + 12]) as usize),
-            0x0110 => ("Model", read_u32(&data[entry + 8..entry + 12]) as usize),
-            0x0131 => ("Software", read_u32(&data[entry + 8..entry + 12]) as usize),
-            0x0132 => ("DateTime", read_u32(&data[entry + 8..entry + 12]) as usize),
-            0x8298 => ("Copyright", read_u32(&data[entry + 8..entry + 12]) as usize),
-            _ => continue,
-        };
-        // 简化：直接当 ASCII 字符串读
-        if val_offset + 8 < data.len() {
-            let s: String = data[val_offset..]
-                .iter()
-                .take_while(|&&b| b != 0)
-                .map(|&b| b as char)
-                .collect();
-            map.insert(name.to_string(), s.trim().to_string());
-        }
-    }
-    map
 }
 
 /// 保存 base64 编码的数据到文件，返回写入字节数。
