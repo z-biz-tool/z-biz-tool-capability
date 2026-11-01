@@ -1,0 +1,26 @@
+[package]
+name = "cap-screen"
+version = "0.1.0"
+edition = "2021"
+description = "屏幕采集原语：显示器/窗口枚举与截屏（含区域裁剪与编码，无状态）"
+license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["screen", "capture", "screenshot", "monitor", "window"]
+categories = ["multimedia::images", "api-bindings"]
+
+[dependencies]
+# 跨平台截屏：macOS 用 ScreenCaptureKit，Windows 用 DXGI，Linux 用 X11/Wayland。
+# 版本与 remote 仓保持一致（0.9.8），避免同族两套截屏行为。
+xcap = "0.9.8"
+# 帧的等比缩放 + RGBA→RGB 降通道 + JPEG/base64 编码。
+# 刻意**不直接依赖 image / base64**：那两件事都在 cap-img 内，
+# 本 crate 只负责「采到像素」，编码交给调用方走 cap-img。
+cap-img = { path = "../cap-img" }
+# 存 PNG 时要构造 RgbaImage ⇒ 需要 image 本身。
+# 版本与 cap-img / xcap 对齐（workspace 里是唯一版本源）。
+image = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
