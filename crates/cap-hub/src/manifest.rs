@@ -21,8 +21,11 @@ use serde::{Deserialize, Serialize};
 ///
 /// 与 bundle id / 数据目录命名保持一致（`z-biz-tool-db` → `db`），
 /// 减少用户与开发者的心智负担。
+///
+/// `kb` 已于 2026-11-01 摘除：能力并入 note（检索/切片/问答）与
+/// cap-doc（pdf/docx/pptx 解析原语），仓库归档，见 z-biz-tool-kb README。
 pub const PRODUCT_IDS: &[&str] = &[
-    "aigen", "box", "cpu", "db", "file", "history", "kb", "math", "mind", "music", "note", "pet",
+    "aigen", "box", "cpu", "db", "file", "history", "math", "mind", "music", "note", "pet",
     "remote", "sys", "terminal", "worker",
 ];
 
