@@ -223,6 +223,22 @@ pub struct MigrationReport {
 /// 写入成功**之后**才抹旧文件里的密钥字段。抹不掉只记 note，不算失败 ——
 /// 迁移本身已经成功，不该因为擦屁股失败而让用户看到「迁移失败」。
 pub fn migrate_legacy_configs() -> Result<MigrationReport, StoreError> {
+    let home = crate::store::home_dir().ok_or_else(|| {
+        StoreError::Io("无法确定用户家目录（HOME / USERPROFILE 均未设置）".into())
+    })?;
+    migrate_legacy_in(&home)
+}
+
+/// [`migrate_legacy_configs`] 的可注入形态：扫描根由调用方给定。
+///
+/// **为什么要有它**：全量版按 `HOME` 扫旧落点，而 `HOME` 在 macOS 上
+/// 同时决定 Security 框架的默认钥匙串位置 —— 测试里改 `HOME` 会让
+/// 密钥库整个失效（"A default keychain could not be found"），
+/// 隔离与密钥库**不能同时成立**。各仓要测「自己的旧文件会被搬走」时，
+/// 用本函数把扫描根指到临时目录，`HOME` 保持不动。
+///
+/// 与全量版同一套幂等与抹明文语义。
+pub fn migrate_legacy_in(home: &Path) -> Result<MigrationReport, StoreError> {
     let mut report = MigrationReport::default();
 
     // 新落点已有配置 ⇒ 不动。
@@ -243,7 +259,13 @@ pub fn migrate_legacy_configs() -> Result<MigrationReport, StoreError> {
         return Ok(report);
     }
 
-    let candidates = scan_legacy();
+    let mut candidates = Vec::new();
+    for site in legacy_sites() {
+        let path = home.join(site.rel);
+        if let Some(candidate) = read_legacy_file(&path, site.source) {
+            candidates.push(candidate);
+        }
+    }
     let Some(first) = candidates
         .into_iter()
         .find(|c| !c.api_key.is_empty() || !c.model.is_empty())

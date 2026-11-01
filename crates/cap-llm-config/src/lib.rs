@@ -54,7 +54,9 @@ pub mod migrate;
 pub mod store;
 pub mod testing;
 
-pub use migrate::{migrate_legacy_configs, write_migrated, LegacyCandidate, MigrationReport};
+pub use migrate::{
+    migrate_legacy_configs, migrate_legacy_in, write_migrated, LegacyCandidate, MigrationReport,
+};
 pub use store::{
     config_path, load_config, save_config, shared_secret_store, KeyringSecret, LlmConfigFile,
     LlmSecret, StoreError,
