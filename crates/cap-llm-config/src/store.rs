@@ -496,6 +496,13 @@ mod tests {
     fn file_secret_backend_roundtrip_via_shared_store() {
         // 文件后端走 shared_secret_store 门面：db/kb 的测试在无密钥库的
         // Linux runner 上能不能跑，取决于这条链路通不通。
+        //
+        // ⚠️ 必须拿 crate 级环境变量锁：IsolatedLlm 改的是进程级环境变量，
+        // 本测试与 migrate 的测试并发时，不拿锁会互相抢 Z_BIZ_TOOL_LLM_DIR
+        // —— 本测试写下的「统一配置」被 migrate 测试看见 ⇒ migrate 判
+        // 「统一配置已存在」跳过迁移 ⇒ migrate 测试红（CI 实测）。
+        // testing.rs 模块文档的规矩：碰统一落点的测试一律先拿锁。
+        let _guard = crate::testing::lock_llm_env();
         let dir = crate::testing::IsolatedLlm::new("file-secret-rt");
         let _ = &dir; // 借活整个测试
 
