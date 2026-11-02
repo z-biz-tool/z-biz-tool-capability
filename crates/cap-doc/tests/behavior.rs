@@ -6,8 +6,12 @@
 use std::path::Path;
 
 #[test]
-fn supported_extensions_cover_the_three_parsers() {
-    assert_eq!(cap_doc::SUPPORTED_EXTENSIONS, &["pdf", "epub", "mobi"]);
+fn supported_extensions_cover_the_parsers() {
+    // 2026-11-01 起含 ooxml（docx/pptx，承接 kb 的外部文档解析）
+    assert_eq!(
+        cap_doc::SUPPORTED_EXTENSIONS,
+        &["pdf", "epub", "mobi", "docx", "pptx"]
+    );
 }
 
 #[test]
@@ -16,13 +20,13 @@ fn supports_is_case_insensitive_and_ignores_directories() {
     assert!(cap_doc::supports("A.PDF"));
     assert!(cap_doc::supports("/tmp/书.epub"));
     assert!(cap_doc::supports(Path::new("x.mobi")));
+    assert!(cap_doc::supports("报告.docx"));
+    assert!(cap_doc::supports("deck.PPTX"));
 
     // 无扩展名 / 不认识的扩展名 / 只有目录名 —— 都不该误判
     assert!(!cap_doc::supports("README"));
-    assert!(
-        !cap_doc::supports("a.docx"),
-        "docx 由 file 自己处理，不在本层"
-    );
+    assert!(!cap_doc::supports("a.doc"), "旧版 OLE 二进制仍不认");
+    assert!(!cap_doc::supports("a.xlsx"), "表格类不在本层");
     assert!(!cap_doc::supports("/tmp/pdf/"), "目录名里的 pdf 不算扩展名");
 }
 
