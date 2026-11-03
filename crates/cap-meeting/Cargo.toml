@@ -9,13 +9,17 @@ homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
 keywords = ["meeting", "minutes", "transcript", "summarize", "llm"]
 categories = ["text-processing", "api-bindings"]
 
+# 允许发布到 crates.io 官方源（对外只发源码，不含任何密钥与内部数据）。
+publish = ["crates-io"]
 # 边界说明（与 cap-llm 的分工）：
 #   cap-llm  —— 传输：multipart、鉴权、SSE、脱敏、错误分类。**不写提示词**。
 #   cap-meeting —— 业务语义：会议元信息、纪要结构、提示词模板、Markdown 渲染。
 # 为什么提示词不放 cap-llm：「把散乱口语文本整理成决议」是产品差异而非基础设施，
 # 否则所有调用 cap-llm 的人都被强制接受同一套纪要口径。
 [dependencies]
-cap-llm = { path = "../cap-llm" }
+# version 必填：cargo package 要求所有依赖带版本号（发布时 path 被自动剥离，
+# 依赖解析回落到 crates.io 的 cap-llm）。本地开发仍走 path，改动即时可见。
+cap-llm = { path = "../cap-llm", version = "0.1.0" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

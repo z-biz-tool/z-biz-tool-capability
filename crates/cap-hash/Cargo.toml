@@ -11,6 +11,8 @@ homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
 keywords = ["hash", "fnv", "crc32", "checksum"]
 categories = ["algorithms", "encoding"]
 
+# 允许发布到 crates.io 官方源（对外只发源码，不含任何密钥与内部数据）。
+publish = ["crates-io"]
 # 刻意零依赖：哈希是纯字节计算，零依赖换来「每条能力都能被单测覆盖」——
 # 与 cap-audio / cap-video 同一个理由。
 [dependencies]

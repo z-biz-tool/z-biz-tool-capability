@@ -12,5 +12,7 @@ homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
 keywords = ["video", "mp4", "webm", "metadata", "thumbnail"]
 categories = ["multimedia::video", "api-bindings"]
 
+# 允许发布到 crates.io 官方源（对外只发源码，不含任何密钥与内部数据）。
+publish = ["crates-io"]
 # 刻意零依赖：容器元数据解析是纯字节计算；解码交给外部 ffmpeg 并做可用性检测
 [dependencies]

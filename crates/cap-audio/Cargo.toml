@@ -9,5 +9,7 @@ homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
 keywords = ["audio", "wav", "pcm", "resample", "dsp"]
 categories = ["multimedia::audio", "api-bindings"]
 
+# 允许发布到 crates.io 官方源（对外只发源码，不含任何密钥与内部数据）。
+publish = ["crates-io"]
 # 刻意零依赖：WAV 容器解析与 PCM 换算是纯计算，零依赖换来「每条能力都能单测」
 [dependencies]

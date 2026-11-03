@@ -10,6 +10,8 @@ homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
 keywords = ["sso", "oauth", "oidc", "tauri", "keychain"]
 categories = ["api-bindings", "authentication"]
 
+# 允许发布到 crates.io 官方源（对外只发源码，不含任何密钥与内部数据）。
+publish = ["crates-io"]
 [features]
 # Tauri 胶水层（开浏览器）。
 #

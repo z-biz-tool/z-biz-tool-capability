@@ -9,6 +9,8 @@ homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
 keywords = ["tauri", "deeplink", "ipc", "z-biz"]
 categories = ["api-bindings"]
 
+# 允许发布到 crates.io 官方源（对外只发源码，不含任何密钥与内部数据）。
+publish = ["crates-io"]
 [features]
 # Tauri 胶水层（receiver 模块）。
 #
