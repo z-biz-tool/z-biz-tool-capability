@@ -36,4 +36,6 @@ futures-util = "0.3"
 tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
 
 [profile.release]
-strip = true
+debug = false
+incremental = false
+strip = "symbols"
