@@ -511,80 +511,75 @@ fn strip_html_tags(html: &str) -> String {
     result.trim().to_string()
 }
 
-/// 解析MOBI文件（简单实现）
+/// 解析 MOBI 家族（.mobi / .azw / .azw3 / .prc）。
+///
+/// 真正的解析在 [`crate::mobi`]：这里之所以单独留一层，是因为**这条转发不是多余的**。
+/// 早先这里是「不解压直接当 UTF-8 读」的简化实现，对任何真实 MOBI 都只输出乱码，
+/// 而调用方看不出区别（命令成功、有章节、就是不认字）。留一层薄壳能让
+/// `parse_ebook` 的分派表保持一行一项，不必知道 MOBI 的细节。
 pub fn parse_mobi(path: &str) -> Result<EpubBook, String> {
-    let file_path = Path::new(path);
-    if !file_path.exists() {
-        return Err(format!("文件不存在: {}", path));
+    crate::mobi::parse(path)
+}
+
+// ───────────────────────── 统一入口 ─────────────────────────
+
+/// 按扩展名分派到具体解析器。
+///
+/// 前端只需要记一个命令：这本书是 epub 还是 mobi，由这里判断。让每个调用点
+/// 各抄一份扩展名表，那份表早晚会和实际实现长歪（KB 那边就出过这种情况）。
+pub fn parse_ebook(path: &str) -> Result<EpubBook, String> {
+    let ext = Path::new(path)
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    match ext.as_str() {
+        "epub" => parse_epub(path),
+        "mobi" | "azw" | "azw3" | "prc" => parse_mobi(path),
+        "txt" => parse_txt(path),
+        "fb2" => parse_fb2(path),
+        other => Err(format!("`{}` 不是可解析的电子书格式", other)),
+    }
+}
+
+// ───────────────────────── TXT ─────────────────────────
+
+/// 文本文件的一个章节。`body` 是**纯文本**，转 HTML 由 [`txt_body_to_html`] 做。
+pub struct TextSection {
+    pub title: String,
+    pub body: String,
+}
+
+/// 解析 TXT 小说。
+///
+/// TXT 是唯一需要猜编码的格式：同一本小说的 UTF-8 版和 GBK 版在磁盘上长得一样，
+/// 没有任何元数据可查。国内 TXT 小说绝大多数是 GB18030，所以「严格 UTF-8 失败
+/// 就按 GB18030」这条兜底是最有效的一刀。
+pub fn parse_txt(path: &str) -> Result<EpubBook, String> {
+    let raw = fs::read(path).map_err(|e| format!("读取失败: {}", e))?;
+    if raw.is_empty() {
+        return Err("文件是空的".to_string());
     }
 
-    let bytes = fs::read(file_path).map_err(|e| format!("读取MOBI文件失败: {}", e))?;
-    if bytes.len() < 64 {
-        return Err("MOBI文件过小，无法解析".to_string());
+    let text = decode_text(&raw);
+    if text.trim().is_empty() {
+        return Err("文件里没有文本内容".to_string());
     }
 
-    // 检查MOBI header magic
-    if &bytes[60..64] != b"MOBI" {
-        return Err("不是有效的MOBI文件格式".to_string());
-    }
-
-    let file_stem = file_path
+    let title = Path::new(path)
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "未知书名".to_string());
+        .unwrap_or_else(|| "未命名".to_string());
 
-    // 提取书名
-    let title = if bytes.len() > 92 {
-        let name_offset =
-            u32::from_be_bytes(bytes[84..88].try_into().unwrap_or([0, 0, 0, 0])) as usize;
-        let name_len =
-            u32::from_be_bytes(bytes[88..92].try_into().unwrap_or([0, 0, 0, 0])) as usize;
-        if name_offset > 0 && name_len > 0 && name_offset + name_len <= bytes.len() {
-            String::from_utf8_lossy(&bytes[name_offset..name_offset + name_len])
-                .trim_end_matches('\0')
-                .to_string()
-        } else {
-            file_stem
-        }
-    } else {
-        file_stem
-    };
-
-    let content = extract_mobi_text_content(&bytes);
-    let chapters = if content.is_empty() {
-        vec![Chapter {
-            title: "全文".to_string(),
-            content: "<p>无法从MOBI文件中提取文本内容。建议转换为EPUB格式后阅读。</p>".to_string(),
-            index: 0,
-        }]
-    } else {
-        // 按HTML heading分割
-        let mut chs = Vec::new();
-        let mut idx = 0;
-        let parts: Vec<&str> = content.split('\x00').collect();
-        for part in parts {
-            let trimmed = part.trim();
-            if !trimmed.is_empty() {
-                let ch_title =
-                    extract_html_title(trimmed).unwrap_or_else(|| format!("章节 {}", idx + 1));
-                chs.push(Chapter {
-                    title: ch_title,
-                    content: trimmed.to_string(),
-                    index: idx,
-                });
-                idx += 1;
-            }
-        }
-        if chs.is_empty() {
-            vec![Chapter {
-                title: "全文".to_string(),
-                content,
-                index: 0,
-            }]
-        } else {
-            chs
-        }
-    };
+    let sections = split_txt_sections(&text);
+    let chapters = sections
+        .into_iter()
+        .enumerate()
+        .map(|(i, s)| Chapter {
+            title: s.title,
+            content: txt_body_to_html(&s.body),
+            index: i,
+        })
+        .collect();
 
     Ok(EpubBook {
         title,
@@ -594,53 +589,561 @@ pub fn parse_mobi(path: &str) -> Result<EpubBook, String> {
     })
 }
 
-/// 从MOBI提取文本内容（简单实现）
-fn extract_mobi_text_content(bytes: &[u8]) -> String {
-    if bytes.len() < 78 {
-        return String::new();
+/// 嗅探编码并解码。
+///
+/// 顺序不能反：BOM 优先（它是最强证据），然后严格 UTF-8（能通过基本就不是
+/// 单字节编码），最后才按 GB18030。反过来先按 GB18030 的话，UTF-8 的中文会被
+/// 解成一堆生僻字 —— 这是「看着像乱码但每个字都认识」的那种，最难判断。
+fn decode_text(raw: &[u8]) -> String {
+    if raw.starts_with(&[0xef, 0xbb, 0xbf]) {
+        return String::from_utf8_lossy(&raw[3..]).to_string();
+    }
+    if raw.starts_with(&[0xff, 0xfe]) {
+        return encoding_rs::UTF_16LE.decode(&raw[2..]).0.into_owned();
+    }
+    if raw.starts_with(&[0xfe, 0xff]) {
+        return encoding_rs::UTF_16BE.decode(&raw[2..]).0.into_owned();
+    }
+    if let Ok(s) = std::str::from_utf8(raw) {
+        return s.to_string();
     }
 
-    let num_records =
-        u16::from_be_bytes(<[u8; 2]>::try_from(&bytes[76..78]).unwrap_or([0, 0])) as usize;
-
-    if num_records < 2 || bytes.len() < 78 + num_records * 8 {
-        return String::new();
-    }
-
-    let mut parts = Vec::new();
-    for i in 1..num_records {
-        let off_start = 78 + i * 8;
-        if off_start + 8 > bytes.len() {
-            break;
+    // 无 BOM 的 UTF-16：中文文本按奇数位多为 0x00。先看这个特征，
+    // 否则 4 万字的 UTF-16 中文会被当成 GB18030 解出一半的乱码。
+    if raw.len() % 2 == 0 && raw.len() > 8 {
+        let zeros_at_odd = raw.iter().skip(1).step_by(2).filter(|&&b| b == 0).count();
+        let pairs = raw.len() / 2;
+        if pairs > 0 && zeros_at_odd * 10 > pairs * 6 {
+            let (s, _, err) = encoding_rs::UTF_16LE.decode(raw);
+            if !err {
+                return s.into_owned();
+            }
         }
+    }
 
-        let start = u32::from_be_bytes(
-            bytes[off_start..off_start + 4]
-                .try_into()
-                .unwrap_or([0, 0, 0, 0]),
-        ) as usize;
-        let next_off = 78 + (i + 1) * 8;
-        let end = if i + 1 < num_records && next_off + 4 <= bytes.len() {
-            u32::from_be_bytes(
-                bytes[next_off..next_off + 4]
-                    .try_into()
-                    .unwrap_or([0, 0, 0, 0]),
-            ) as usize
+    let (cow, _, _) = encoding_rs::GB18030.decode(raw);
+    cow.into_owned()
+}
+
+/// 判断一行是不是章节标题。
+///
+/// 中文小说的章节行几乎都是「第X章/节/回/卷/部/篇/集」打头，再加几个固定词
+/// （序章、楔子、番外…）。行长度卡 40 字是关键：正文里「第三次世界大战爆发了」
+/// 也以「第三」开头，但它是一整段，不该被切成标题。
+pub fn is_chapter_heading(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let chars: Vec<char> = t.chars().collect();
+    if chars.len() > 40 {
+        return false;
+    }
+
+    // 固定词
+    const FIXED: &[&str] = &[
+        "序章", "序言", "楔子", "引子", "前言", "后记", "尾声", "终章", "番外", "附录",
+    ];
+    if FIXED.iter().any(|f| t.starts_with(f)) {
+        return true;
+    }
+
+    // 第X章 / 第X节 / 第X回 / 第X卷 / 第X部 / 第X篇 / 第X集
+    if chars[0] == '第' {
+        let mut i = 1;
+        let mut digits = 0;
+        while i < chars.len() {
+            let c = chars[i];
+            if is_cjk_digit(c) {
+                digits += 1;
+                i += 1;
+                continue;
+            }
+            return digits > 0 && matches!(c, '章' | '节' | '回' | '卷' | '部' | '篇' | '集');
+        }
+        return false;
+    }
+
+    // 卷X / 章X
+    if matches!(chars[0], '卷' | '章' | '回') && chars.len() > 1 && is_cjk_digit(chars[1]) {
+        return true;
+    }
+
+    // Chapter 12 / CHAPTER XII
+    let lower = t.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("chapter") {
+        let rest = rest.trim_start_matches(|c: char| c == ':' || c == ' ' || c == '.');
+        return !rest.is_empty()
+            && rest
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit() || is_roman(c))
+                .unwrap_or(false);
+    }
+
+    false
+}
+
+fn is_cjk_digit(c: char) -> bool {
+    matches!(
+        c,
+        '零' | '〇'
+            | '一'
+            | '二'
+            | '两'
+            | '三'
+            | '四'
+            | '五'
+            | '六'
+            | '七'
+            | '八'
+            | '九'
+            | '十'
+            | '百'
+            | '千'
+            | '万'
+            | '0'..='9'
+    )
+}
+
+fn is_roman(c: char) -> bool {
+    matches!(c.to_ascii_lowercase(), 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm')
+}
+
+/// 按章节标题切段。没有标题的纯文本整体算一节。
+///
+/// 只切不合并：宁可多出几个「无标题」小节，也不要把两章粘在一节里 ——
+/// 后者在翻页阅读器里表现为「翻到某页突然换了两章」，读者很难判断进度。
+pub fn split_txt_sections(text: &str) -> Vec<TextSection> {
+    let mut out: Vec<TextSection> = Vec::new();
+    let mut title = "正文".to_string();
+    let mut buf: Vec<String> = Vec::new();
+
+    fn flush(title: &str, buf: &mut Vec<String>, out: &mut Vec<TextSection>) {
+        let body = buf.join("\n");
+        buf.clear();
+        if body.trim().is_empty() {
+            return;
+        }
+        out.push(TextSection {
+            title: title.to_string(),
+            body,
+        });
+    }
+
+    for line in text.lines() {
+        let t = line.trim();
+        if is_chapter_heading(t) {
+            flush(&title, &mut buf, &mut out);
+            title = t.to_string();
         } else {
-            bytes.len()
-        };
+            buf.push(t.to_string());
+        }
+    }
+    flush(&title, &mut buf, &mut out);
 
-        if start >= bytes.len() || end <= start {
+    if out.is_empty() {
+        out.push(TextSection {
+            title: "正文".to_string(),
+            body: text.to_string(),
+        });
+    }
+    out
+}
+
+/// 纯文本 → HTML 片段。
+///
+/// 每个非空行当成一个段落。中文 TXT 小说的排版是「一行一段」，如果改成
+/// 「空行才分段」，整本书会粘成几十个巨型段落，翻页器一页显示不出完整段落，
+/// 阅读体验比现在这种差得多。
+pub fn txt_body_to_html(body: &str) -> String {
+    let mut out = String::with_capacity(body.len() + 64);
+    for line in body.lines() {
+        let t = line.trim();
+        if t.is_empty() {
             continue;
         }
-        let end = end.min(bytes.len());
+        out.push_str("<p>");
+        out.push_str(&escape_html(t));
+        out.push_str("</p>");
+    }
+    if out.is_empty() {
+        out.push_str("<p></p>");
+    }
+    out
+}
 
-        let text = String::from_utf8_lossy(&bytes[start..end]);
-        if text.contains('<') || !text.trim().is_empty() {
-            parts.push(text.to_string());
+fn escape_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(c),
         }
     }
-    parts.join("\n")
+    out
+}
+
+// ───────────────────────── FB2 ─────────────────────────
+
+/// 解析 FictionBook 2（.fb2）。它本来就是 XML，只差把标签换成 HTML 的。
+pub fn parse_fb2(path: &str) -> Result<EpubBook, String> {
+    let raw = fs::read(path).map_err(|e| format!("读取失败: {}", e))?;
+    let text = decode_text(&raw);
+
+    let stem = Path::new(path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "未命名".to_string());
+
+    let title = extract_first_tag_text(&text, "book-title").unwrap_or(stem);
+    let author = extract_fb2_author(&text).unwrap_or_else(|| "未知作者".to_string());
+
+    let html = fb2_body_to_html(&text);
+    let chunks = split_html_on_headings(&html);
+
+    let chapters = chunks
+        .into_iter()
+        .enumerate()
+        .map(|(i, html)| {
+            let t = first_tag_text(&html, "h3").unwrap_or_else(|| format!("第 {} 节", i + 1));
+            Chapter {
+                title: t,
+                content: html,
+                index: i,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if chapters.is_empty() {
+        return Err("FB2 里没有正文".to_string());
+    }
+
+    Ok(EpubBook {
+        title,
+        author,
+        chapters,
+        cover_path: String::new(),
+    })
+}
+
+fn extract_fb2_author(text: &str) -> Option<String> {
+    // <author><first-name>名</first-name><last-name>姓</last-name></author>
+    let start = text.find("<author>")?;
+    let end = text[start..].find("</author>")? + start;
+    let block = &text[start..end];
+    let join = |a: &str, b: &str| -> Option<String> {
+        let first = extract_first_tag_text(block, a).unwrap_or_default();
+        let last = extract_first_tag_text(block, b).unwrap_or_default();
+        let s = format!("{}{}", first, last).trim().to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
+    };
+    // 中文 FB2 常写成 <nickname>，西文是 first+last
+    join("first-name", "last-name")
+        .or_else(|| join("last-name", "first-name"))
+        .or_else(|| extract_first_tag_text(block, "nickname"))
+}
+
+/// 把 `<body>` 里的内容换成等价 HTML。只做标签名映射，不动层级 ——
+/// FB2 的 section 嵌套本身就是章节结构，转成 div 之后由标题切分来定章。
+fn fb2_body_to_html(text: &str) -> String {
+    let Some(bstart) = text.find("<body") else {
+        return String::new();
+    };
+    let Some(gt) = text[bstart..].find('>') else {
+        return String::new();
+    };
+    let content_start = bstart + gt + 1;
+    // 可能有多本 body（<body name="notes">），只取第一个正文
+    let content_end = text[content_start..]
+        .find("</body>")
+        .map(|p| content_start + p)
+        .unwrap_or(text.len());
+    let body = &text[content_start..content_end];
+
+    let mut s = body.to_string();
+    // 命名空间前缀形式 <fb:section>
+    s = s.replace("<fb:", "<").replace("</fb:", "</");
+    // 先处理成对标签，再做自闭合
+    s = s.replace("<section", "<div").replace("</section>", "</div>");
+    s = s.replace("<title>", "<h3>").replace("</title>", "</h3>");
+    s = s.replace("<subtitle>", "<h4>").replace("</subtitle>", "</h4>");
+    s = s.replace("<emphasis", "<em").replace("</emphasis>", "</em>");
+    s = s.replace("<epigraph", "<blockquote").replace("</epigraph>", "</blockquote>");
+    s = s.replace("<poem", "<div").replace("</poem>", "</div>");
+    s = s.replace("<stanza", "<div").replace("</stanza>", "</div>");
+    // 图片在独立二进制段里，这里没导出，留着就是裂图
+    s = s.replace("<image", "<span data-dropped=\"image\"");
+    s = s.replace("<empty-line/>", "<p><br/></p>");
+    s = s.replace("<empty-line />", "<p><br/></p>");
+    // 去掉 XML 里没意义的 <p/> 与自闭合 p
+    s = s.replace("<p/>", "<p><br/></p>");
+    s
+}
+
+/// 按 h3/h4 切块。FB2 的 `<title>` 已经转成了 h3，正好当章节边界。
+fn split_html_on_headings(html: &str) -> Vec<String> {
+    let mut marks: Vec<usize> = Vec::new();
+    for tag in ["<h3", "<h4"] {
+        let mut from = 0;
+        while let Some(p) = html[from..].find(tag) {
+            marks.push(from + p);
+            from += p + tag.len();
+        }
+    }
+    if marks.is_empty() {
+        let t = html.trim();
+        return if t.is_empty() {
+            Vec::new()
+        } else {
+            vec![t.to_string()]
+        };
+    }
+    marks.sort_unstable();
+    marks.dedup();
+
+    let mut out = Vec::new();
+    if marks[0] > 0 {
+        let head = html[..marks[0]].trim();
+        if !head.is_empty() {
+            out.push(head.to_string());
+        }
+    }
+    for (i, &m) in marks.iter().enumerate() {
+        let end = marks.get(i + 1).copied().unwrap_or(html.len());
+        let seg = html[m..end].trim();
+        if !seg.is_empty() {
+            out.push(seg.to_string());
+        }
+    }
+    out
+}
+
+fn extract_first_tag_text(text: &str, tag: &str) -> Option<String> {
+    let open = format!("<{}", tag);
+    let s = text.find(&open)?;
+    let gt = text[s..].find('>')?;
+    let start = s + gt + 1;
+    let close = format!("</{}>", tag);
+    let e = text[start..].find(&close)?;
+    let raw = &text[start..start + e];
+    let cleaned = raw
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'");
+    let t = cleaned.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+fn first_tag_text(html: &str, tag: &str) -> Option<String> {
+    let open = format!("<{}", tag);
+    let s = html.find(&open)?;
+    let gt = html[s..].find('>')?;
+    let start = s + gt + 1;
+    let close = format!("</{}>", tag);
+    let e = html[start..].find(&close)?;
+    let inner = &html[start..start + e];
+    let txt = strip_html(inner);
+    if txt.is_empty() {
+        None
+    } else {
+        Some(truncate(txt.trim(), 60))
+    }
+}
+
+fn strip_html(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                out.push(' ');
+            }
+            _ if !in_tag => out.push(c),
+            _ => {}
+        }
+    }
+    out.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(n).collect();
+    out.push('…');
+    out
+}
+
+// ───────────────────────── 漫画（CBZ） ─────────────────────────
+
+/// 把 CBZ（zip 装的图片）解到 `cache_root` 下，返回按阅读顺序排好的图片路径。
+///
+/// 走「解到磁盘再用 asset 协议加载」而不是 base64 内联：一部漫画几十页、
+/// 单页几百 KB，base64 会让 IPC 消息涨到几十 MB，窗口会直接卡住。
+///
+/// `cache_root` 由调用方给：Tauri 的 asset 协议有路径白名单，通常只放行
+/// `$HOME` / `$APPLOCALDATA`，而 `std::env::temp_dir()` 在 macOS 上落在
+/// `/var/folders`，写在那里前端根本加载不出来。原语层不认 Tauri，
+/// 所以目录选择权交给命令层。
+///
+/// 子目录名 = 「路径 + 大小 + 修改时间」的哈希：换一本漫画就换目录，
+/// 同一本重开则命中旧目录（已解过就不再解）。
+pub fn extract_comic(path: &str, cache_root: &str) -> Result<Vec<String>, String> {
+    let meta = fs::metadata(path).map_err(|e| format!("读取失败: {}", e))?;
+    let stamp = format!(
+        "{}|{}|{}",
+        path,
+        meta.len(),
+        meta.modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    );
+    let dir = Path::new(cache_root).join(hash_name(&stamp));
+    fs::create_dir_all(&dir).map_err(|e| format!("建缓存目录失败: {}", e))?;
+
+    let file = fs::File::open(path).map_err(|e| format!("打开失败: {}", e))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| format!("不是有效的 CBZ: {}", e))?;
+
+    // 已解过且页数对得上就直接用
+    let mut existing = collect_images(&dir);
+    if !existing.is_empty() {
+        return Ok(existing.drain(..).map(|p| p.to_string_lossy().to_string()).collect());
+    }
+
+    let mut names: Vec<(usize, String)> = Vec::new();
+    for i in 0..zip.len() {
+        let Ok(zf) = zip.by_index(i) else { continue };
+        if zf.is_dir() {
+            continue;
+        }
+        // zip 9 起 name() 返回 ZipResult<Cow<str>>，条目名可能压根不是 UTF-8
+        let Ok(raw_name) = zf.name() else { continue };
+        let name = raw_name.to_string();
+        let lower = name.to_lowercase();
+        if !matches!(
+            Path::new(&lower).extension().and_then(|e| e.to_str()),
+            Some("jpg") | Some("jpeg") | Some("png") | Some("webp") | Some("gif") | Some("bmp")
+        ) {
+            continue;
+        }
+        names.push((i, name));
+    }
+    if names.is_empty() {
+        return Err("这个 CBZ 里没有图片".to_string());
+    }
+    names.sort_by(|a, b| natural_cmp(&a.1, &b.1));
+
+    let mut out = Vec::with_capacity(names.len());
+    for (seq, (idx, name)) in names.iter().enumerate() {
+        let Ok(mut zf) = zip.by_index(*idx) else { continue };
+        let ext = Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("jpg")
+            .to_lowercase();
+        let target = dir.join(format!("{:05}.{}", seq, ext));
+        let mut buf = Vec::new();
+        if std::io::Read::read_to_end(&mut zf, &mut buf).is_err() {
+            continue;
+        }
+        if fs::write(&target, &buf).is_err() {
+            continue;
+        }
+        out.push(target.to_string_lossy().to_string());
+    }
+
+    if out.is_empty() {
+        return Err("解不出任何页面".to_string());
+    }
+    Ok(out)
+}
+
+fn collect_images(dir: &Path) -> Vec<std::path::PathBuf> {
+    let Ok(rd) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<std::path::PathBuf> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    files.sort();
+    files
+}
+
+fn hash_name(s: &str) -> String {
+    // FNV-1a：这里只用来分目录，不需要抗碰撞
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{:016x}", h)
+}
+
+/// 自然排序：`2.jpg` 要排在 `10.jpg` 前面。漫画文件名常是 `1.jpg` 而非 `001.jpg`，
+/// 纯字典序会把第 10 页排到第 2 页前面。
+fn natural_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+    let mut ai = a.chars().peekable();
+    let mut bi = b.chars().peekable();
+    loop {
+        match (ai.peek().copied(), bi.peek().copied()) {
+            (None, None) => return std::cmp::Ordering::Equal,
+            (None, Some(_)) => return std::cmp::Ordering::Less,
+            (Some(_), None) => return std::cmp::Ordering::Greater,
+            (Some(ca), Some(cb)) => {
+                if ca.is_ascii_digit() && cb.is_ascii_digit() {
+                    let mut na = String::new();
+                    while let Some(&c) = ai.peek() {
+                        if !c.is_ascii_digit() {
+                            break;
+                        }
+                        na.push(c);
+                        ai.next();
+                    }
+                    let mut nb = String::new();
+                    while let Some(&c) = bi.peek() {
+                        if !c.is_ascii_digit() {
+                            break;
+                        }
+                        nb.push(c);
+                        bi.next();
+                    }
+                    let va: u64 = na.parse().unwrap_or(0);
+                    let vb: u64 = nb.parse().unwrap_or(0);
+                    match va.cmp(&vb) {
+                        std::cmp::Ordering::Equal => continue,
+                        other => return other,
+                    }
+                }
+                match ca.cmp(&cb) {
+                    std::cmp::Ordering::Equal => {
+                        ai.next();
+                        bi.next();
+                    }
+                    other => return other,
+                }
+            }
+        }
+    }
 }
 
 /// 提取EPUB封面（base64编码）

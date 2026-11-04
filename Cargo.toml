@@ -14,6 +14,10 @@ serde_json = "1"
 lopdf = { version = "0.34", features = ["pom_parser"] }
 zip = { version = "9", features = ["deflate64", "lzma", "xz"] }
 flate2 = "1"
+# 中文电子书（TXT 小说、GBK 编码的 MOBI）必须做真实编码转换：
+# MOBI 的 text_encoding 常见 65001(UTF-8) / 1252(cp1252) / 936(GBK)，
+# 而 TXT 小说在国内绝大多数是 GB18030。没有这层就只能输出替换字符。
+encoding_rs = "0.8"
 
 # cap-llm（统一 AI 接入层）—— 上面那句「reqwest 分裂不再重演」写在这里很久了，
 # 但 workspace.dependencies 里一直没有 reqwest，所以分裂一直在。本表从此刻起是唯一版本源：

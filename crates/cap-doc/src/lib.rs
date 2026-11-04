@@ -33,10 +33,15 @@ mod paths;
 mod test_support;
 
 pub mod ebook;
+pub mod mobi;
 pub mod ooxml;
 pub mod pdf;
 
-pub use ebook::{get_epub_cover, parse_epub, parse_mobi, Chapter, EpubBook};
+pub use ebook::{
+    extract_comic, get_epub_cover, is_chapter_heading, parse_ebook, parse_epub, parse_fb2,
+    parse_mobi, parse_txt, split_txt_sections, txt_body_to_html, Chapter, EpubBook, TextSection,
+};
+pub use mobi::read_meta as mobi_read_meta;
 pub use ooxml::{extract_docx_text, extract_pptx_text, DocxText, PptxText};
 pub use pdf::compress::{compress_pdf_blocking, CompressReport};
 pub use pdf::image::{extract_pdf_images_blocking, ExtractReport};
@@ -48,7 +53,12 @@ pub use pdf::watermark::watermark_pdf_blocking;
 ///
 /// 供调用方做「这个文件我能不能处理」的前置判断，避免每个下游各写一份表 ——
 /// 那份表早晚和实际实现长歪。
-pub const SUPPORTED_EXTENSIONS: &[&str] = &["pdf", "epub", "mobi", "docx", "pptx"];
+///
+/// 分层：PDF 有排版信息（页/字），EPUB/MOBI/FB2/TXT 是「流式文本」，
+/// CBZ 是「图片序列」，DOCX/PPTX 只取文本。
+pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "pdf", "epub", "mobi", "azw", "azw3", "prc", "txt", "fb2", "cbz", "docx", "pptx",
+];
 
 /// 按扩展名判断是否可处理（大小写不敏感）。
 pub fn supports(path: impl AsRef<std::path::Path>) -> bool {

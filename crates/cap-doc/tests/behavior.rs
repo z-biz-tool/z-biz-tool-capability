@@ -8,9 +8,13 @@ use std::path::Path;
 #[test]
 fn supported_extensions_cover_the_parsers() {
     // 2026-11-01 起含 ooxml（docx/pptx，承接 kb 的外部文档解析）
+    // 2026-11-05 起补齐电子书家族：azw/azw3/prc 都是 MOBI 容器，
+    // txt/fb2 是流式文本，cbz 是图片序列
     assert_eq!(
         cap_doc::SUPPORTED_EXTENSIONS,
-        &["pdf", "epub", "mobi", "docx", "pptx"]
+        &[
+            "pdf", "epub", "mobi", "azw", "azw3", "prc", "txt", "fb2", "cbz", "docx", "pptx"
+        ]
     );
 }
 
