@@ -12,9 +12,7 @@ fn supported_extensions_cover_the_parsers() {
     // txt/fb2 是流式文本，cbz 是图片序列
     assert_eq!(
         cap_doc::SUPPORTED_EXTENSIONS,
-        &[
-            "pdf", "epub", "mobi", "azw", "azw3", "prc", "txt", "fb2", "cbz", "docx", "pptx"
-        ]
+        &["pdf", "epub", "mobi", "azw", "azw3", "prc", "txt", "fb2", "cbz", "docx", "pptx"]
     );
 }
 

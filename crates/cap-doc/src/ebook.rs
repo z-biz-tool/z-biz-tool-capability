@@ -707,7 +707,10 @@ fn is_cjk_digit(c: char) -> bool {
 }
 
 fn is_roman(c: char) -> bool {
-    matches!(c.to_ascii_lowercase(), 'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm')
+    matches!(
+        c.to_ascii_lowercase(),
+        'i' | 'v' | 'x' | 'l' | 'c' | 'd' | 'm'
+    )
 }
 
 /// 按章节标题切段。没有标题的纯文本整体算一节。
@@ -872,11 +875,19 @@ fn fb2_body_to_html(text: &str) -> String {
     // 命名空间前缀形式 <fb:section>
     s = s.replace("<fb:", "<").replace("</fb:", "</");
     // 先处理成对标签，再做自闭合
-    s = s.replace("<section", "<div").replace("</section>", "</div>");
+    s = s
+        .replace("<section", "<div")
+        .replace("</section>", "</div>");
     s = s.replace("<title>", "<h3>").replace("</title>", "</h3>");
-    s = s.replace("<subtitle>", "<h4>").replace("</subtitle>", "</h4>");
-    s = s.replace("<emphasis", "<em").replace("</emphasis>", "</em>");
-    s = s.replace("<epigraph", "<blockquote").replace("</epigraph>", "</blockquote>");
+    s = s
+        .replace("<subtitle>", "<h4>")
+        .replace("</subtitle>", "</h4>");
+    s = s
+        .replace("<emphasis", "<em")
+        .replace("</emphasis>", "</em>");
+    s = s
+        .replace("<epigraph", "<blockquote")
+        .replace("</epigraph>", "</blockquote>");
     s = s.replace("<poem", "<div").replace("</poem>", "</div>");
     s = s.replace("<stanza", "<div").replace("</stanza>", "</div>");
     // 图片在独立二进制段里，这里没导出，留着就是裂图
@@ -1025,7 +1036,10 @@ pub fn extract_comic(path: &str, cache_root: &str) -> Result<Vec<String>, String
     // 已解过且页数对得上就直接用
     let mut existing = collect_images(&dir);
     if !existing.is_empty() {
-        return Ok(existing.drain(..).map(|p| p.to_string_lossy().to_string()).collect());
+        return Ok(existing
+            .drain(..)
+            .map(|p| p.to_string_lossy().to_string())
+            .collect());
     }
 
     let mut names: Vec<(usize, String)> = Vec::new();
@@ -1053,7 +1067,9 @@ pub fn extract_comic(path: &str, cache_root: &str) -> Result<Vec<String>, String
 
     let mut out = Vec::with_capacity(names.len());
     for (seq, (idx, name)) in names.iter().enumerate() {
-        let Ok(mut zf) = zip.by_index(*idx) else { continue };
+        let Ok(mut zf) = zip.by_index(*idx) else {
+            continue;
+        };
         let ext = Path::new(name)
             .extension()
             .and_then(|e| e.to_str())

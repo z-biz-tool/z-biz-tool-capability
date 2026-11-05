@@ -563,7 +563,8 @@ mod tests {
         // ⇒ 密钥框不显示 ⇒ 用户配了也连不上，且**没有任何报错**。
         let fl = find("freellmapi").expect("缺 freellmapi 预设");
         assert!(
-            fl.base_url.starts_with("http://127.0.0.1:") || fl.base_url.starts_with("http://localhost:"),
+            fl.base_url.starts_with("http://127.0.0.1:")
+                || fl.base_url.starts_with("http://localhost:"),
             "FreeLLMAPI 默认地址必须是回环地址：{}",
             fl.base_url
         );

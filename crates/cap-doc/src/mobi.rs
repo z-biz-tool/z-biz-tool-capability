@@ -68,8 +68,7 @@ pub fn parse(path: &str) -> Result<EpubBook, String> {
     let text = decode_bytes(&raw, header.text_encoding);
     if text.trim().is_empty() {
         return Err(
-            "没有解出正文。这本书可能是纯 KF8（AZW3）排版，需要先在阅读器里转成 EPUB"
-                .to_string(),
+            "没有解出正文。这本书可能是纯 KF8（AZW3）排版，需要先在阅读器里转成 EPUB".to_string(),
         );
     }
 
@@ -708,9 +707,13 @@ fn first_heading_text(html: &str) -> Option<String> {
         let open = format!("<{}", tag);
         let close = format!("</{}", tag);
         let Some(s) = html.find(&open) else { continue };
-        let Some(gt) = html[s..].find('>') else { continue };
+        let Some(gt) = html[s..].find('>') else {
+            continue;
+        };
         let inner_start = s + gt + 1;
-        let Some(e) = html[inner_start..].find(&close) else { continue };
+        let Some(e) = html[inner_start..].find(&close) else {
+            continue;
+        };
         let text = strip_tags(&html[inner_start..inner_start + e]);
         let text = text.trim();
         if !text.is_empty() {
