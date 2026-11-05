@@ -4,14 +4,26 @@
 //!
 //! ```text
 //! 配置（非敏感）：~/.z-biz-tool/llm/config.json
-//! 密钥（敏感）：  OS 密钥库 service="z-biz-tool" / account="llm.apikey"
+//! 密钥（敏感）：  按平台分发 —— 见下
 //! ```
+//!
+//! ## 密钥落点按平台分发
+//!
+//! | 平台 | 落点 |
+//! |---|---|
+//! | macOS | `~/.z-biz-tool/llm/secret.enc`（自建 AES-256-GCM + 同目录 `master.key`） |
+//! | Windows / Linux | OS 密钥库 service=`z-biz-tool` / account=`llm.apikey` |
+//!
+//! **macOS 为什么不用钥匙串**：钥匙串条目的 ACL 把「创建者的代码签名」记为
+//! 唯一可信应用，而我们是 adhoc 签名（designated requirement 是 cdhash，
+//! 每次重打包就变）⇒ 每次启动都弹「wants to use your confidential information」。
+//! 详见 [`crate::encrypted_file`] 模块文档 —— 里面列了四种实测走不通的替代方案。
 //!
 //! # 为什么密钥不写进 config.json
 //!
 //! 配置文件是**明文 JSON**。哪怕给它 0600 权限，也挡不住：
 //! 同机任何进程读用户目录、备份工具、误传到 git 的家目录快照。
-//! 而密钥放 OS 密钥库，macOS 上还要再过一道钥匙串 ACL。
+//! 而密钥单独存放（macOS 上是加密文件，Windows/Linux 上是 OS 密钥库）。
 //!
 //! 代价是**密钥库不可用时无处可存**（Linux 无 Secret Service 守护进程）。
 //! 这种情况必须**显式报错**而不是悄悄降级到明文文件 —— 悄悄降级
@@ -106,6 +118,10 @@ pub trait LlmSecret {
 /// 基于 OS 密钥库的实现。
 ///
 /// service 固定 `z-biz-tool`（**不带应用后缀**）⇒ 所有兄弟应用读写同一个条目。
+///
+/// **macOS 上不是生产后端** —— 那儿用 [`crate::encrypted_file::EncryptedFileSecret`]，
+/// 因为钥匙串 ACL 与代码签名绑定，adhoc 签名的 app 每次重打包都要重新授权。
+/// 本实现在 macOS 上仍保留（供显式调用与 Windows/Linux 生产使用）。
 pub struct KeyringSecret {
     service: String,
     account: String,
@@ -151,13 +167,18 @@ fn secret_service_name() -> String {
         .unwrap_or_else(|| SECRET_SERVICE.to_string())
 }
 
-/// 密钥的落点解析：测试文件后端优先，其次 OS 密钥库。
+/// 密钥的落点解析：测试文件后端优先，其次按平台选生产后端。
 ///
-/// `Z_BIZ_TOOL_SECRET_FILE` 指向一个文件时，密钥读写走 [`FileSecret`] ——
-/// **仅供测试**：Linux CI runner 没有 Secret Service 守护进程，而
-/// db/kb/file 等仓的统一落点测试都要走「保存含密钥」的路径；不切后端
-/// 这些测试在 runner 上必红（`No default store has been set`）。
-/// 生产代码从不设这个变量，因此生产路径保持密钥库，不受影响。
+/// # 平台分发
+///
+/// | 平台 | 后端 | 为什么 |
+/// |---|---|---|
+/// | macOS | [`EncryptedFileSecret`]（自建 AES-256-GCM） | 钥匙串 ACL 绑「创建者的代码签名」，我们是 adhoc 签名 ⇒ 每次重打包都弹授权框。详见 `src/encrypted_file.rs` 的模块文档（含四种实测失败的替代方案） |
+/// | Windows / Linux | [`KeyringSecret`]（OS 凭据管理器 / Secret Service） | 那两个平台的密钥库没有「签名绑定」问题，没必要自建 |
+/// | 任意（测试） | [`FileSecret`] | `Z_BIZ_TOOL_SECRET_FILE` 指向文件时启用。Linux CI runner 没有 Secret Service 守护进程，而 db/kb/file 等仓的统一落点测试都要走「保存含密钥」的路径；不切后端这些测试在 runner 上必红（`No default store has been set`）。生产代码从不设这个变量 |
+///
+/// 顺序很重要：**测试用的环境变量优先级最高** —— 否则 macOS 上跑测试时
+/// 会去动用户真实的 `~/.z-biz-tool/llm/secret.enc`。
 fn shared_secret_impl() -> std::sync::Arc<dyn LlmSecret + Send + Sync> {
     if let Some(path) = std::env::var_os("Z_BIZ_TOOL_SECRET_FILE") {
         if !path.is_empty() {
@@ -166,8 +187,20 @@ fn shared_secret_impl() -> std::sync::Arc<dyn LlmSecret + Send + Sync> {
             });
         }
     }
-    // KeyringSecret 无状态，Arc 包一层满足 trait object 的生命周期
-    std::sync::Arc::new(KeyringSecret::new())
+    #[cfg(target_os = "macos")]
+    {
+        // macOS：不用钥匙串（adhoc 签名 ⇒ 每次启动弹「wants to use your
+        // confidential information」）。落点与配置同目录，便于整体备份/迁移。
+        let path = config_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(crate::SECRET_FILE);
+        std::sync::Arc::new(crate::encrypted_file::EncryptedFileSecret::new(path))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        // KeyringSecret 无状态，Arc 包一层满足 trait object 的生命周期
+        std::sync::Arc::new(KeyringSecret::new())
+    }
 }
 
 /// 家族共享的密钥库门面。

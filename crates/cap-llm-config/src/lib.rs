@@ -50,10 +50,24 @@
 //! `default = []` —— 核心能力（路径、配置读写、迁移判定）零 tauri 依赖，
 //! 可被 node 测试、CLI 工具、非 Tauri 宿主直接复用。
 
+pub mod encrypted_file;
+pub mod keychain_migrate;
 pub mod migrate;
 pub mod store;
 pub mod testing;
 
+/// macOS 上的加密密钥文件名（与配置同目录）。
+///
+/// **macOS 不用 OS 钥匙串** —— 钥匙串 ACL 绑「创建者的代码签名」，
+/// 而这些 app 是 adhoc 签名（designated requirement 就是 cdhash），
+/// 每次重新打包 cdhash 就变 ⇒ 每次启动都弹授权框。
+/// 详见 [`encrypted_file`] 模块文档（含四种实测失败的替代方案）。
+pub const SECRET_FILE: &str = "secret.enc";
+
+/// 主密钥文件名（与 [`SECRET_FILE`] 同目录，权限 0600）。
+pub const MASTER_KEY_FILE: &str = "master.key";
+
+pub use keychain_migrate::{migrate_keychain_secret, KeychainMigrationReport};
 pub use migrate::{
     migrate_legacy_configs, migrate_legacy_in, write_migrated, LegacyCandidate, MigrationReport,
 };

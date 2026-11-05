@@ -39,6 +39,29 @@ reqwest = { version = "0.12", default-features = false, features = [
 futures-util = "0.3"
 tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
 
+# 凭证静态加密（cap-llm-config 的 macOS 后端，见该 crate 的 src/encrypted_file.rs）：
+#
+# **为什么 macOS 不用 OS 钥匙串**：钥匙串条目的 ACL 把「创建者的代码签名」记为
+# 唯一可信应用。我们这些 app 是 **adhoc 签名**，其 designated requirement 就是
+# cdhash（`codesign -d -r-` 实测：`designated => cdhash H"..."`）⇒ 每次重新打包
+# cdhash 就变 ⇒ 钥匙串认为是个新应用 ⇒ **每次启动都弹**
+# 「z-biz-tool-file wants to use your confidential information stored in z-biz-tool」。
+#
+# 实测过但走不通的替代方案（都写在 cap-llm-config 的 encrypted_file 模块文档里，
+# 那里有完整的实验方法与判据，别再走一遍）：
+#   - kSecUseDataProtectionKeychain：-34018（缺 entitlement，未签名 app 用不了）
+#   - all-apps ACL（SecAccessCreate + SecACLSetContents）：只对当前进程有效，
+#     换个 cdhash 的二进制读同一条目仍阻塞 ⇒ 治不了「每次重打包」
+#   - security add-generic-password -A：同上，换二进制读照样阻塞
+#   - 按路径信任（SecTrustedApplicationCreateFromPath）：同路径但字节不同 ⇒ 仍弹
+#   - 正式签名证书：本机 `security find-identity` = 0 个可用身份
+#
+# 版本与 z-biz-tool-file/src-tauri（terminal 板块自建的那套）保持一致，
+# 存储格式也刻意对齐 `enc:v1:`，两边的密文能互相读。
+aes-gcm = "0.10"
+getrandom = "0.2"
+data-encoding = "2"
+
 [profile.release]
 debug = false
 incremental = false

@@ -26,7 +26,16 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # OS 密钥库：macOS Keychain / Windows Credential Manager / Linux Secret Service。
 # 与 cap-sso 用同一个 crate（4.2.0），跨平台行为一致。
+#
+# ⚠️ **macOS 上不用它**（见 src/encrypted_file.rs 的模块文档）：
+# 钥匙串 ACL 绑「创建者的代码签名」，而我们是 adhoc 签名 ⇒ 每次重打包都弹
+# 「wants to use your confidential information」。Windows / Linux 仍然走它 ——
+# 那两个平台的凭据管理器 / Secret Service 没有这个签名绑定问题。
 keyring = "4.2.0"
+# macOS 后端的静态加密（见 src/encrypted_file.rs）。
+aes-gcm = { workspace = true }
+getrandom = { workspace = true }
+data-encoding = { workspace = true }
 tauri = { version = "2", optional = true }
 # 供应商预设目录：迁移时按旧地址反查厂商（db 仓旧配置没有 provider 字段）。
 # version 必填：cargo package 要求所有依赖带版本号（发布时 path 被自动剥离，
