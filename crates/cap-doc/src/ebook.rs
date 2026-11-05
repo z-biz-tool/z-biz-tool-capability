@@ -610,7 +610,7 @@ fn decode_text(raw: &[u8]) -> String {
 
     // 无 BOM 的 UTF-16：中文文本按奇数位多为 0x00。先看这个特征，
     // 否则 4 万字的 UTF-16 中文会被当成 GB18030 解出一半的乱码。
-    if raw.len() % 2 == 0 && raw.len() > 8 {
+    if raw.len().is_multiple_of(2) && raw.len() > 8 {
         let zeros_at_odd = raw.iter().skip(1).step_by(2).filter(|&&b| b == 0).count();
         let pairs = raw.len() / 2;
         if pairs > 0 && zeros_at_odd * 10 > pairs * 6 {
@@ -672,7 +672,7 @@ pub fn is_chapter_heading(line: &str) -> bool {
     // Chapter 12 / CHAPTER XII
     let lower = t.to_ascii_lowercase();
     if let Some(rest) = lower.strip_prefix("chapter") {
-        let rest = rest.trim_start_matches(|c: char| c == ':' || c == ' ' || c == '.');
+        let rest = rest.trim_start_matches([':', ' ', '.']);
         return !rest.is_empty()
             && rest
                 .chars()

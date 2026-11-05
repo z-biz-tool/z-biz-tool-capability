@@ -653,8 +653,8 @@ mod tests {
                 .to_string()
         };
         assert_ne!(
-            port_of(&fl.base_url),
-            port_of(&zl.base_url),
+            port_of(fl.base_url),
+            port_of(zl.base_url),
             "两条回环预设必须靠端口区分 —— 否则按 host 匹配的实现会认错服务"
         );
     }
