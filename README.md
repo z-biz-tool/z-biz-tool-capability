@@ -22,7 +22,7 @@ crates/
 ├── cap-hub/      家族握手：zbiz:// 深链的构造 / 解析 / 待处理队列 / 产品清单
 ├── cap-llm/      AI 接入：OpenAI 兼容 / Anthropic / Gemini / Ollama 四协议归一，
 │                 chat / 流式 / 模型列表 / 连通性探测（2026-10-26 归并十套实现）
-│                 + 供应商预设目录（17 条，2026-10-28，借鉴 cc-switch）
+│                 + 供应商预设目录（19 条，2026-11-05，借鉴 cc-switch）
 ├── cap-meeting/  会议纪要：结构化纪要（议题 / 决策 / 行动项）的解析与 Markdown 化
 ├── cap-screen/   屏幕采集：显示器 / 窗口枚举与截屏（含区域裁剪与编码，无状态）
 └── cap-sso/      单点登录：本地回调服务 / 密钥保管 / 外部浏览器打开
@@ -141,7 +141,7 @@ file 的 `path_guard` 在 `doc_cmd.rs` 里前置执行（与 `cap-img` 的约定
 `https://api.deepseek.com/v1` —— 抄错一个字符就是 404，而报错只说「404」。
 
 cc-switch 的做法是内置 90+ 预设：选中一家，地址协议一起填好，用户只补 Key。
-本 crate 是同一思路的家族版，内置 **17 条**（国际 4 / 国内 10 / 聚合 2 / 自建 1）。
+本 crate 是同一思路的家族版，内置 **19 条**（国际 3 / 国内 10 / 聚合 3 / 自建 3）。
 
 ```rust
 use cap_llm::preset::{find, PRESETS};

@@ -348,6 +348,44 @@ pub static PRESETS: &[ProviderPreset] = &[
         requires_api_key: false,
         kind: ProviderKind::Custom,
     },
+    // ── FreeLLMAPI（本地跑的免费额度聚合路由器）─────────────────
+    //
+    // 第三方开源项目（MIT），把各家大厂的免费额度聚成一个 OpenAI 兼容端点：
+    //   http://127.0.0.1:3001/v1
+    //
+    // 为什么值得单独一条预设，而不是让用户手填地址：
+    // ① **它必须要密钥** —— 这是与 `zbiz-local` 最容易踩的差别。
+    //    zbiz-local 是自家网关，回环流量不校验 Authorization；FreeLLMAPI
+    //    强制要一个 `freellmapi-…` 统一 Bearer（管理后台 Keys 页取）。
+    //    两条预设都在回环段，若都登记成「免 Key」，前端按地址判私网会
+    //    把 FreeLLMAPI 也当成免 Key ⇒ 用户永远看不到密钥框 ⇒ 配上也用不了。
+    // ② 它常与 zbiz-local 同机（都是本机服务），端口不同（3001 vs 8200）。
+    //    **服务身份必须带端口比** —— 只比 host 会把两者认成同一个。
+    //
+    // `kind` 是 `Custom`：对外就是 OpenAI 兼容协议，报文/鉴权/SSE 分帧
+    // 与 OpenAI 完全一致，差别只在地址与「必须要 Key」。
+    //
+    // 上游自己写明「仅供个人实验与学习，不适用于生产环境」，
+    // 且免费版模型目录比实时目录落后约 30 天 —— 这是它的固有代价，
+    // 不是本预设能修的。所以这里只登记「怎么连」，不替它做质量承诺。
+    ProviderPreset {
+        id: "freellmapi",
+        label: "FreeLLMAPI（免费额度聚合）",
+        protocol: Protocol::OpenAiCompat,
+        base_url: "http://127.0.0.1:3001/v1",
+        aliases: &[
+            "freellmapi",
+            "free-llm-api",
+            "free llm api",
+            "免费额度",
+            "免费聚合",
+            "白嫖额度",
+        ],
+        category: Category::SelfHosted,
+        verified_on: "2026-11-05",
+        requires_api_key: true,
+        kind: ProviderKind::Custom,
+    },
 ];
 
 /// 按 id 找预设。id 大小写不敏感。
@@ -489,6 +527,11 @@ mod tests {
         // 2026-10-31 加入 zbiz-local 后，这条从「只有 ollama」放宽为白名单 +
         // 分类双重约束：必须同时满足「在白名单里」和「属于自建分类」。
         // 光有白名单会漏掉「有人把云厂商错误地标成自建」这种情况。
+        //
+        // 2026-11-05 加入 freellmapi 后，这条多担了一份责任：
+        // **回环地址 ≠ 免密钥**。FreeLLMAPI 跑在回环上，但它强制要一个
+        // 统一 Bearer 密钥。所以白名单里不能有它 —— 否则前端按地址判私网，
+        // 把一个必须要 Key 的服务当成免 Key，用户永远看不到密钥框。
         const KEYLESS_WHITELIST: &[&str] = &["ollama", "zbiz-local"];
         for p in PRESETS {
             if !p.requires_api_key {
@@ -505,6 +548,44 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn loopback_presets_can_still_require_a_key() {
+        // 「在回环上」是**地址事实**，「要不要 Key」是**服务事实**，两者无关。
+        //
+        // 这条判据钉死一件容易被「顺手统一」掉的事：
+        // FreeLLMAPI（127.0.0.1:3001）和 zBiz 本地网关（127.0.0.1:8200）
+        // 都在回环段，但前者必须要 Key、后者不要。
+        //
+        // 反例（真会咬人的场景）：若有人看到「自建分类都是免 Key」就把
+        // freellmapi 也标成 `requires_api_key: false` ⇒ 前端按地址判私网
+        // ⇒ 密钥框不显示 ⇒ 用户配了也连不上，且**没有任何报错**。
+        let fl = find("freellmapi").expect("缺 freellmapi 预设");
+        assert!(
+            fl.base_url.starts_with("http://127.0.0.1:") || fl.base_url.starts_with("http://localhost:"),
+            "FreeLLMAPI 默认地址必须是回环地址：{}",
+            fl.base_url
+        );
+        assert!(
+            fl.requires_api_key,
+            "FreeLLMAPI 强制要统一 Bearer 密钥（freellmapi-…），不得登记成免 Key"
+        );
+        assert_eq!(
+            fl.category,
+            Category::SelfHosted,
+            "它跑在自建分类下，但分类不等于免密钥"
+        );
+
+        // 反向对照：同分类的 zbiz-local 确实免 Key —— 证明这条判据
+        // 不是「自建分类一律要 Key」这种反向的永真。
+        let zl = find("zbiz-local").expect("缺 zbiz-local 预设");
+        assert_eq!(zl.category, fl.category, "两者同分类");
+        assert!(!zl.requires_api_key, "zbiz-local 仍然免 Key");
+        assert_ne!(
+            fl.base_url, zl.base_url,
+            "两条预设必须是不同端口 —— 端口是区分它们身份的唯一依据"
+        );
     }
 
     #[test]
@@ -527,6 +608,55 @@ mod tests {
             .endpoint(Action::Chat)
             .unwrap();
         assert_eq!(ep, "http://127.0.0.1:8200/v1/chat/completions");
+    }
+
+    #[test]
+    fn freellmapi_points_at_its_own_loopback_port_and_needs_the_unified_key() {
+        let p = find("freellmapi").expect("缺 freellmapi 预设");
+        assert_eq!(p.protocol, Protocol::OpenAiCompat);
+        assert_eq!(p.kind, ProviderKind::Custom);
+        assert!(p.requires_api_key, "FreeLLMAPI 强制要统一 Bearer");
+        assert_eq!(p.base_url, "http://127.0.0.1:3001/v1");
+        // 端点拼接归一后必须干净 —— 地址抄错一个字符就是 404，
+        // 而 404 是最难查的一类故障。
+        let ep = p
+            .to_config("freellmapi-test-key", "test-model")
+            .endpoint(Action::Chat)
+            .unwrap();
+        assert_eq!(ep, "http://127.0.0.1:3001/v1/chat/completions");
+    }
+
+    #[test]
+    fn loopback_presets_are_distinguished_by_port_not_just_host() {
+        // 这条是**跨仓契约**，钉死一个真实咬过人的 bug。
+        //
+        // 背景：两条预设都在 `127.0.0.1` 上（8200 / 3001），而
+        // 「同一个服务」的判定口径各仓并不统一：
+        // - Rust `detect_preset()` 的 `host_of` **保留端口**（`127.0.0.1:8200`）
+        // - 前端 `privateEndpoint.hostOf` **剥掉端口**（`127.0.0.1`）
+        //
+        // 前端只比 host ⇒ 两条回环预设被认成**同一个**，命中数组里靠前的那条。
+        // 命中 zbiz-local（免 Key）时，FreeLLMAPI（要 Key）就被误判成免 Key ⇒
+        // 用户永远看不到密钥框 ⇒ 配了也连不上，且没有任何报错。
+        //
+        // 所以：**服务身份必须带端口**。这条断言要求两条预设的端口不同，
+        // 让「按 host 匹配」的错误实现立刻暴露成认错服务。
+        let fl = find("freellmapi").unwrap();
+        let zl = find("zbiz-local").unwrap();
+        let port_of = |u: &str| {
+            u.rsplit(':')
+                .next()
+                .unwrap_or("")
+                .split('/')
+                .next()
+                .unwrap_or("")
+                .to_string()
+        };
+        assert_ne!(
+            port_of(&fl.base_url),
+            port_of(&zl.base_url),
+            "两条回环预设必须靠端口区分 —— 否则按 host 匹配的实现会认错服务"
+        );
     }
 
     #[test]
@@ -574,6 +704,18 @@ mod tests {
         assert_eq!(cfg.kind, ProviderKind::Custom);
         assert_eq!(cfg.base_url, "https://api.deepseek.com/v1");
         assert!(cfg.model.is_empty(), "模型名应由运行时取，预设不预填");
+    }
+
+    #[test]
+    fn preset_count_is_pinned() {
+        // 计数钉死 —— README 里写着「内置 N 条」，N 变了 README 就过期了。
+        // 这个断言的作用是**逼人改 README**：加预设时这条会红，
+        // 于是「README 与代码不一致」不会悄悄溜过去。
+        assert_eq!(PRESETS.len(), 19, "预设条数变了，README 的计数要同步");
+        assert_eq!(by_category(Category::International).count(), 3);
+        assert_eq!(by_category(Category::Domestic).count(), 10);
+        assert_eq!(by_category(Category::Aggregator).count(), 3);
+        assert_eq!(by_category(Category::SelfHosted).count(), 3);
     }
 
     #[test]
