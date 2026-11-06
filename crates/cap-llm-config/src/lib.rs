@@ -76,6 +76,14 @@ pub use store::{
     LlmSecret, StoreError,
 };
 
+/// 多条目密文文件名（数据库连接密码等「多条凭据」的场景）。
+///
+/// 2026-11-06：z-biz-tool-db 仓的数据库密码原本走 `keyring` crate
+///（macOS 钥匙串，service=`z-biz-tool-db`）。db 仓并入 z-biz-tool-file 时
+/// 换成 [`encrypted_file::MultiSecretFile`] —— 同一把主密钥装下所有连接密码，
+/// 避开 adhoc 签名在钥匙串上每次弹授权框的问题。
+pub const MULTI_SECRET_FILE: &str = "secrets.enc";
+
 /// 家族统一的配置目录名（家目录下的隐藏目录）。
 ///
 /// 刻意**单数** `z-biz-tool`：家族里已有 `~/.z-biz-tools`（box，带 s）

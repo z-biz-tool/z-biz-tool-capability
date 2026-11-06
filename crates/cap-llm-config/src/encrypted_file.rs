@@ -231,6 +231,250 @@ fn restrict_private(path: &Path) {
     }
 }
 
+/// 多条目加密文件。
+///
+/// ## 为什么需要它
+///
+/// [`EncryptedFileSecret`] 一次只存**一个**字符串 —— 那正好够 LLM 密钥
+/// （家族里只有一份）。但数据库板块有**多条连接**，每条一个密码。
+///
+/// 最省事的做法本来是每条连接一个 `EncryptedFileSecret`（一个密文文件
+/// + 一个主密钥文件），但那会在配置目录里堆出 N 个 `master.key`，
+/// 备份/迁移/清理都得逐个来，而且主密钥一多就等于密钥分散。
+///
+/// 所以这里做一个**多条目**版本：一个密文文件装下所有条目，
+/// 共用同一个主密钥文件。
+///
+/// ## 落盘格式
+///
+/// ```text
+/// {
+///   "version": 1,
+///   "entries": {
+///     "<id>": "enc:v1:<base64(nonce||ciphertext||tag)>",
+///     ...
+///   }
+/// }
+/// ```
+///
+/// 整体是 JSON —— 好处是能直接被人读懂「有哪些条目」，
+/// 而每条的值仍是密文。整个文件权限 0600。
+///
+/// ## 为什么不复用 OS 密钥库
+///
+/// 与 [`EncryptedFileSecret`] 同一个理由：macOS 钥匙串 ACL 与代码签名绑定，
+/// 本家族是 adhoc 签名（cdhash 每次重打包都变）⇒ 每次读密码都弹授权框。
+/// 数据库密码比 LLM 密钥读得更频繁（每次建连接），弹窗更烦人。
+///
+/// 2026-11-06：z-biz-tool-db 仓的数据库密码原本走 `keyring` crate
+/// （macOS 钥匙串，service=`z-biz-tool-db`），db 仓并入 z-biz-tool-file
+/// 时换成这个后端。
+pub struct MultiSecretFile {
+    path: PathBuf,
+    key_path: PathBuf,
+}
+
+impl MultiSecretFile {
+    /// 用密文文件路径建后端。主密钥路径由它推导（同目录 `master.key`）。
+    pub fn new(path: PathBuf) -> Self {
+        let key_path = path
+            .parent()
+            .map(|d| d.join("master.key"))
+            .unwrap_or_else(|| PathBuf::from("master.key"));
+        Self { path, key_path }
+    }
+
+    /// 密文文件路径。
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// 读主密钥；不存在则随机生成并以 0600 落盘。
+    fn load_or_create_master_key(&self) -> Result<[u8; KEY_LEN], String> {
+        match fs::read(&self.key_path) {
+            Ok(bytes) => {
+                let len = bytes.len();
+                let key: [u8; KEY_LEN] = bytes.try_into().map_err(|_| {
+                    format!(
+                        "主密钥长度应为 {} 字节，实际 {}（文件 {} 损坏）",
+                        KEY_LEN,
+                        len,
+                        self.key_path.display()
+                    )
+                })?;
+                return Ok(key);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("读取主密钥失败: {}", e)),
+        }
+
+        let mut key = [0u8; KEY_LEN];
+        getrandom::getrandom(&mut key).map_err(|e| format!("生成主密钥失败: {}", e))?;
+        if let Some(parent) = self.key_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
+        }
+        fs::write(&self.key_path, key).map_err(|e| format!("写入主密钥失败: {}", e))?;
+        restrict_private(&self.key_path);
+        Ok(key)
+    }
+
+    /// 加密一段明文。
+    fn encrypt(&self, key: &[u8; KEY_LEN], plain: &str) -> Result<String, String> {
+        let cipher =
+            Aes256Gcm::new_from_slice(key).map_err(|e| format!("初始化加密器失败: {}", e))?;
+        let mut nonce = [0u8; NONCE_LEN];
+        getrandom::getrandom(&mut nonce).map_err(|e| format!("生成随机数失败: {}", e))?;
+
+        let body = cipher
+            .encrypt(Nonce::from_slice(&nonce), plain.as_bytes())
+            .map_err(|e| format!("加密失败: {}", e))?;
+
+        let mut packed = Vec::with_capacity(NONCE_LEN + body.len());
+        packed.extend_from_slice(&nonce);
+        packed.extend_from_slice(&body);
+        Ok(format!(
+            "{}{}",
+            ENC_PREFIX,
+            data_encoding::BASE64.encode(&packed)
+        ))
+    }
+
+    /// 解密一段密文。
+    ///
+    /// 不带前缀的值按**明文**处理 —— 兼容「先写成明文、后升级加密」的中间态。
+    fn decrypt(&self, key: &[u8; KEY_LEN], value: &str) -> Result<String, String> {
+        if !value.starts_with(ENC_PREFIX) {
+            return Ok(value.to_string());
+        }
+        let raw = data_encoding::BASE64
+            .decode(&value.as_bytes()[ENC_PREFIX.len()..])
+            .map_err(|e| format!("密文 base64 解析失败: {}", e))?;
+        if raw.len() < NONCE_LEN {
+            return Err("密文长度不足, 已损坏".into());
+        }
+        let (nonce, body) = raw.split_at(NONCE_LEN);
+
+        let cipher =
+            Aes256Gcm::new_from_slice(key).map_err(|e| format!("初始化解密器失败: {}", e))?;
+        let plain = cipher
+            .decrypt(Nonce::from_slice(nonce), body)
+            .map_err(|_| "解密失败(主密钥可能已丢失或与密文不匹配)".to_string())?;
+        String::from_utf8(plain).map_err(|e| format!("解密结果非 UTF-8: {}", e))
+    }
+
+    /// 读出全部条目（返回 id → 明文）。
+    ///
+    /// 文件不存在返回空表（不是错误）—— 第一次用就是空的。
+    pub fn read_all(&self) -> Result<std::collections::BTreeMap<String, String>, String> {
+        let key = self.load_or_create_master_key()?;
+        let raw = match fs::read_to_string(&self.path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(std::collections::BTreeMap::new())
+            }
+            Err(e) => return Err(format!("读取密文文件失败: {}", e)),
+        };
+
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            version: u32,
+            entries: std::collections::BTreeMap<String, String>,
+        }
+
+        let env: Envelope = serde_json::from_str(&raw).map_err(|e| {
+            format!(
+                "密文文件解析失败（{}）: {}",
+                self.path.display(),
+                e
+            )
+        })?;
+        if env.version != 1 {
+            return Err(format!(
+                "密文文件版本不支持: {}（本程序只认 1）",
+                env.version
+            ));
+        }
+
+        let mut out = std::collections::BTreeMap::new();
+        for (id, cipher_text) in env.entries {
+            let plain = self.decrypt(&key, &cipher_text)?;
+            out.insert(id, plain);
+        }
+        Ok(out)
+    }
+
+    /// 写入一条（id → 明文）。同 id 覆盖。
+    pub fn put(&self, id: &str, plain: &str) -> Result<(), String> {
+        let key = self.load_or_create_master_key()?;
+        let mut entries = self.read_entries_raw()?;
+        entries.insert(id.to_string(), self.encrypt(&key, plain)?);
+        self.write_entries(entries)
+    }
+
+    /// 删除一条。**幂等** —— id 不存在也算成功。
+    pub fn remove(&self, id: &str) -> Result<(), String> {
+        let mut entries = self.read_entries_raw()?;
+        entries.remove(id);
+        self.write_entries(entries)
+    }
+
+    /// 读一条。没有返回 None。
+    pub fn get(&self, id: &str) -> Result<Option<String>, String> {
+        Ok(self.read_all()?.remove(id))
+    }
+
+    /// 读原始密文条目表（不解密）。
+    fn read_entries_raw(&self) -> Result<std::collections::BTreeMap<String, String>, String> {
+        let raw = match fs::read_to_string(&self.path) {
+            Ok(s) => s,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(std::collections::BTreeMap::new())
+            }
+            Err(e) => return Err(format!("读取密文文件失败: {}", e)),
+        };
+
+        #[derive(serde::Deserialize)]
+        struct Envelope {
+            version: u32,
+            #[serde(default)]
+            entries: std::collections::BTreeMap<String, String>,
+        }
+
+        let env: Envelope = serde_json::from_str(&raw).map_err(|e| {
+            format!("密文文件解析失败（{}）: {}", self.path.display(), e)
+        })?;
+        if env.version != 1 {
+            return Err(format!(
+                "密文文件版本不支持: {}（本程序只认 1）",
+                env.version
+            ));
+        }
+        Ok(env.entries)
+    }
+
+    /// 落盘。原子写 + 0600。
+    fn write_entries(
+        &self,
+        entries: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        #[derive(serde::Serialize)]
+        struct Envelope<'a> {
+            version: u32,
+            entries: &'a std::collections::BTreeMap<String, String>,
+        }
+        let env = Envelope {
+            version: 1,
+            entries: &entries,
+        };
+        let bytes = serde_json::to_vec_pretty(&env)
+            .map_err(|e| format!("序列化密文条目失败: {}", e))?;
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
+        }
+        atomic_write(&self.path, &bytes)
+    }
+}
+
 /// 原子写：临时文件 → fsync → rename。
 ///
 /// 直接写目标路径的话，进程在写到一半被杀会留下截断文件 ——
