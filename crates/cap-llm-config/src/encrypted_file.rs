@@ -381,13 +381,8 @@ impl MultiSecretFile {
             entries: std::collections::BTreeMap<String, String>,
         }
 
-        let env: Envelope = serde_json::from_str(&raw).map_err(|e| {
-            format!(
-                "密文文件解析失败（{}）: {}",
-                self.path.display(),
-                e
-            )
-        })?;
+        let env: Envelope = serde_json::from_str(&raw)
+            .map_err(|e| format!("密文文件解析失败（{}）: {}", self.path.display(), e))?;
         if env.version != 1 {
             return Err(format!(
                 "密文文件版本不支持: {}（本程序只认 1）",
@@ -440,9 +435,8 @@ impl MultiSecretFile {
             entries: std::collections::BTreeMap<String, String>,
         }
 
-        let env: Envelope = serde_json::from_str(&raw).map_err(|e| {
-            format!("密文文件解析失败（{}）: {}", self.path.display(), e)
-        })?;
+        let env: Envelope = serde_json::from_str(&raw)
+            .map_err(|e| format!("密文文件解析失败（{}）: {}", self.path.display(), e))?;
         if env.version != 1 {
             return Err(format!(
                 "密文文件版本不支持: {}（本程序只认 1）",
@@ -466,8 +460,8 @@ impl MultiSecretFile {
             version: 1,
             entries: &entries,
         };
-        let bytes = serde_json::to_vec_pretty(&env)
-            .map_err(|e| format!("序列化密文条目失败: {}", e))?;
+        let bytes =
+            serde_json::to_vec_pretty(&env).map_err(|e| format!("序列化密文条目失败: {}", e))?;
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| format!("创建配置目录失败: {}", e))?;
         }
