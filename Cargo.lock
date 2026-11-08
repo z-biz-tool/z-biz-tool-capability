@@ -666,6 +666,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-glossary"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cap-hash"
 version = "0.1.0"
 

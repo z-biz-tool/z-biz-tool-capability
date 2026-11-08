@@ -1,0 +1,17 @@
+[package]
+name = "cap-glossary"
+version = "0.1.0"
+edition = "2021"
+description = "z-biz-tool 通用词库能力层：Markdown 结构切片、BM25 检索、带引用问答拼装、词条存取。kb（知识库）作为通用板块由本 crate 承载，note 与 file 等地复用"
+license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["bm25", "search", "chunking", "rag", "glossary"]
+categories = ["text-processing"]
+
+# 允许发布到 crates.io 官方源（对外只发源码，不含任何密钥与内部数据）。
+publish = ["crates-io"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
