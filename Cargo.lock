@@ -649,6 +649,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cap-agent"
+version = "0.1.0"
+dependencies = [
+ "cap-llm",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "cap-audio"
 version = "0.1.0"
 

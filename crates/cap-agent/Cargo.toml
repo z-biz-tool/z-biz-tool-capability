@@ -1,0 +1,22 @@
+[package]
+name = "cap-agent"
+version = "0.1.0"
+edition = "2021"
+description = "z-biz-tool 原生 Agent 层：工具注册表 + tool calling 执行循环 + MCP stdio 服务端（无 Node 运行时依赖）"
+license = "MIT"
+repository = "https://github.com/z-biz-tool/z-biz-tool-capability"
+homepage = "https://github.com/z-biz-tool/z-biz-tool-capability"
+keywords = ["agent", "llm", "mcp", "tool-calling"]
+categories = ["api-bindings"]
+
+# 与 cap-img / cap-llm 同源：对外只发源码，不含密钥与内部数据。
+publish = ["crates-io"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+# agent loop 建在 cap-llm 之上（协议适配、错误语义、流式解码都归它）。
+cap-llm = { path = "../cap-llm", version = "0.1.0" }
+
+[dev-dependencies]
+tokio = { workspace = true }

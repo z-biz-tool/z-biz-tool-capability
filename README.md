@@ -23,6 +23,8 @@ crates/
 ├── cap-llm/      AI 接入：OpenAI 兼容 / Anthropic / Gemini / Ollama 四协议归一，
 │                 chat / 流式 / 模型列表 / 连通性探测（2026-10-26 归并十套实现）
 │                 + 供应商预设目录（19 条，2026-11-05，借鉴 cc-switch）
+├── cap-agent/    原生 Agent 层：工具注册表 + tool calling 执行循环 +
+│                 MCP stdio 服务端（2026-11-16 新增，零新增依赖）
 ├── cap-meeting/  会议纪要：结构化纪要（议题 / 决策 / 行动项）的解析与 Markdown 化
 ├── cap-screen/   屏幕采集：显示器 / 窗口枚举与截屏（含区域裁剪与编码，无状态）
 └── cap-sso/      单点登录：本地回调服务 / 密钥保管 / 外部浏览器打开
@@ -131,6 +133,39 @@ file 的 `path_guard` 在 `doc_cmd.rs` 里前置执行（与 `cap-img` 的约定
 可单测性靠「协议层与传输层分离」保证：`wire`（报文构造/解析）与 `sse`（解码）
 完全不碰网络，108 条单测零网络、零 mock。
 
+### cap-agent 的能力边界（2026-11-16 新增）
+
+**它补的是 cap-llm 故意不做的那一段**：`cap_llm::chat_with_tools` 已经支持工具声明、
+`Message::tool` 已经支持按各家协议回灌工具结果，**缺的只是执行循环**
+——「模型要调工具 → 执行 → 喂回去 → 再问」。cap-agent 就是家族里第一份通用的那份。
+
+**为什么现在做**：原来只有 file 带「内置 AI」，做法是捆绑一份 Node.js（**108 MB**）
++ agent-proxy（JS，1668 行）去跑 Pi / claude-code。实测那份捆绑 Pi **根本没装上**
+（`runtime/lib/pi/` 只有 manifest），所以这 108 MB 里 agent 那部分是空转。
+换成 Rust 循环后：没有子进程、没有 HTTP 往返、没有 Node 运行时。
+
+**在的**：
+- **工具注册表**（`ToolRegistry`）：名字 / 说明 / JSON Schema / 异步执行。
+- **执行循环**（`loop::run`）：tool calling → 执行 → 按各家协议回灌 → 再问，
+  带最大轮数与工具输出截断。
+- **MCP stdio 服务端**（`mcp::McpServer`）：同一份工具表以 MCP 协议暴露，
+  外部 agent（Pi / claude-code / [codex](https://github.com/openai/codex)，它本身就是
+  Rust 写的）可以把这个 app 当工具箱用。
+
+**不在的**：
+- **权限与确认策略**。「这个工具要不要先问用户」是业务语义 —— 办法是不注册，
+  模型看不见就不会误触。
+- **密钥存储**。同 cap-llm：只在内存里持有调用方传进来的 key。
+- **计费与配额**。
+- **并发模型**。一次一轮，串行。
+
+**两个形态共用同一份工具表**是这一层存在的全部意义 —— 否则内部 agent 与外部 agent
+会各写一份工具清单，慢慢长歪。
+
+⚠️ **一条别退回旧写法的约定**：`Tool` 用 `Pin<Box<dyn Future>>` 而不是
+`async fn in trait`，是为了保住 `dyn Tool` 的可对象化能力（注册表要装异构工具）。
+改回 `async fn in trait` 会让注册表只能存 `Box<dyn Tool>` 的闭包包装，白折腾。
+
 ### 供应商预设目录（2026-10-28 新增）
 
 > 设计参考：**cc-switch**（`farion1231/cc-switch`）的 preset 模型。
@@ -210,6 +245,8 @@ cargo add cap-video    # 0.1.0（2026-10-20 首发）
 > `cap-hub` / `cap-meeting` / `cap-sso` / `cap-hash` —— 名字仍敞着，版本号没人占。
 > 这些仓目前用 **path 依赖**引用本地实现（`path = "../../z-biz-tool-capability/crates/..."`），
 > 仓内可编译，但没有发布版本可供外部 `cargo add`。
+> `cap-agent`（2026-11-16 新增）同理未上架，且它依赖 `cap-llm` ——
+> **上架顺序必须是 cap-llm 先、cap-agent 后**（cargo publish 要求依赖已有发布版本）。
 
 各 app 的 `src-tauri/Cargo.toml`：
 
